@@ -114,15 +114,13 @@ class LookSubmit(commands.Cog):
     @app_commands.command(name="look_submit", description="Submit a look to the lookbook")
     @app_commands.describe(
         image="Image attachment for your look",
-        comp_name="Name of the competition/look (e.g. Winter Wonderland)",
-        tags="Comma-separated tag names (e.g. casual, pink)",
+        comp_name="Name of the competition/look (e.g. Winter Wonderland)"
     )
     async def look_submit(
         self,
         interaction: discord.Interaction,
         image: discord.Attachment,
-        comp_name: str = None,
-        tags: str = None,
+        comp_name: str,
     ):
         if not is_image_attachment(image):
             await interaction.response.send_message(
@@ -152,9 +150,8 @@ class LookSubmit(commands.Cog):
             )
             return
 
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
 
-        tag_names = parse_tag_string(tags)
         image_bytes = await image.read()
 
         _, error = await self._submit_look(
@@ -166,11 +163,13 @@ class LookSubmit(commands.Cog):
             image_bytes,
             image.filename,
             comp_name,
-            tag_names,
+            [],
         )
 
         if error:
             await interaction.followup.send(error, ephemeral=True)
+        else:
+            await interaction.followup.send("✅ Look submitted successfully!", ephemeral=True)
 
 
 async def setup(bot):

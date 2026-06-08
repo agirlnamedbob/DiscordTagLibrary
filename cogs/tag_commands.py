@@ -3,14 +3,14 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from utils.database import db
-from utils.embeds import create_tag_list_embed, create_search_results_embed
+from utils.embeds import create_tag_list_embed, create_search_results_embed, create_search_gallery_embed
 from utils.helpers import parse_tag_string
 
 
-class TagPaginationView(discord.ui.View):
-    """Interactive buttons to navigate search result pages"""
+class GalleryPaginationView(discord.ui.View):
+    """Interactive buttons to navigate search result gallery pages (1 look per page)"""
 
-    def __init__(self, author_id, tag_names, server_id, guild_id, current_page, total_pages):
+    def __init__(self, author_id, tag_names, server_id, guild_id, current_page, total_pages, mode):
         super().__init__(timeout=120)
         self.author_id = author_id
         self.tag_names = tag_names
@@ -18,6 +18,7 @@ class TagPaginationView(discord.ui.View):
         self.guild_id = guild_id
         self.current_page = current_page
         self.total_pages = total_pages
+        self.mode = mode
         self.update_buttons()
 
     def update_buttons(self):
@@ -25,19 +26,22 @@ class TagPaginationView(discord.ui.View):
         self.next_page.disabled = (self.current_page >= self.total_pages)
 
     async def refresh_view(self, interaction: discord.Interaction):
-        limit = 5
-        offset = (self.current_page - 1) * limit
+        limit = 1
+        offset = self.current_page - 1
 
-        looks, total_count, _ = await db.search_tags_intersection(
-            self.server_id, self.tag_names, limit=limit, offset=offset
+        looks, total_count, _ = await db.search_looks(
+            self.server_id, self.tag_names, mode=self.mode, limit=limit, offset=offset
         )
-        self.total_pages = max(1, math.ceil(total_count / limit))
+        self.total_pages = total_count
         self.update_buttons()
 
-        embed = create_search_results_embed(
-            self.tag_names, looks, self.current_page, self.total_pages, total_count, self.guild_id
-        )
-        await interaction.response.edit_message(embed=embed, view=self)
+        if looks:
+            look = looks[0]
+            tags = await db.get_look_tag_names(look['look_id'])
+            embed = create_search_gallery_embed(
+                look, tags, self.current_page, self.total_pages, self.mode, self.tag_names
+            )
+            await interaction.response.edit_message(embed=embed, view=self)
 
     @discord.ui.button(label="⬅️ Previous", style=discord.ButtonStyle.gray)
     async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -56,6 +60,117 @@ class TagPaginationView(discord.ui.View):
 
         self.current_page += 1
         await self.refresh_view(interaction)
+
+
+class SearchTagsSelect(discord.ui.Select):
+    """Dropdown menu for selecting tags in search."""
+
+    def __init__(self, tags: list):
+        options = [
+            discord.SelectOption(
+                label=f"#{tag['tag_name']}",
+                value=tag['tag_name'],
+            )
+            for tag in tags[:25]
+        ]
+        super().__init__(
+            placeholder="Select tags to search for...",
+            min_values=1,
+            max_values=min(len(options), 25),
+            options=options,
+            custom_id="search_tags_select",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+
+class SearchFormView(discord.ui.View):
+    """Search panel view to choose tags and AND/OR mode."""
+
+    def __init__(self, author_id: int, tags: list):
+        super().__init__(timeout=180)
+        self.author_id = author_id
+        self.mode = "AND"
+        self.tags_select = SearchTagsSelect(tags)
+        self.add_item(self.tags_select)
+        self.update_buttons()
+
+    def update_buttons(self):
+        # Clear previous button items
+        for item in list(self.children):
+            if isinstance(item, discord.ui.Button):
+                self.remove_item(item)
+
+        # Add Toggle Mode button
+        mode_label = f"Mode: {self.mode} (Match All)" if self.mode == "AND" else f"Mode: {self.mode} (Match Any)"
+        mode_style = discord.ButtonStyle.green if self.mode == "AND" else discord.ButtonStyle.gray
+        mode_btn = discord.ui.Button(
+            label=mode_label,
+            style=mode_style,
+            custom_id="search_mode_toggle",
+        )
+        mode_btn.callback = self.toggle_mode
+        self.add_item(mode_btn)
+
+        # Add Search button
+        search_btn = discord.ui.Button(
+            label="🔍 Search",
+            style=discord.ButtonStyle.primary,
+            custom_id="search_submit_btn",
+        )
+        search_btn.callback = self.run_search
+        self.add_item(search_btn)
+
+    async def toggle_mode(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This search form isn't yours!", ephemeral=True)
+            return
+        self.mode = "OR" if self.mode == "AND" else "AND"
+        self.update_buttons()
+        await interaction.response.edit_message(view=self)
+
+    async def run_search(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This search form isn't yours!", ephemeral=True)
+            return
+
+        selected_names = self.tags_select.values
+        if not selected_names:
+            await interaction.response.send_message("❌ Please select at least one tag to search.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        looks, total_count, _ = await db.search_looks(
+            interaction.guild.id, selected_names, mode=self.mode, limit=1, offset=0
+        )
+
+        if not looks:
+            tag_label = f" {self.mode} ".join(f"`#{n}`" for n in selected_names)
+            await interaction.followup.send(
+                f"📌 No looks match {tag_label}! Try selecting different tags.",
+                ephemeral=True,
+            )
+            return
+
+        look = looks[0]
+        tags = await db.get_look_tag_names(look['look_id'])
+        embed = create_search_gallery_embed(
+            look, tags, page=1, total_count=total_count, mode=self.mode, tag_names=selected_names
+        )
+
+        view = GalleryPaginationView(
+            author_id=self.author_id,
+            tag_names=selected_names,
+            server_id=interaction.guild.id,
+            guild_id=interaction.guild.id,
+            current_page=1,
+            total_pages=total_count,
+            mode=self.mode
+        )
+
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 
 class TagCommands(commands.Cog):
@@ -159,89 +274,103 @@ class TagCommands(commands.Cog):
 
     @app_commands.command(
         name="tag_search",
-        description="Search lookbook posts by one or more tags (AND intersection)",
+        description="Open search panel to filter looks using tag dropdowns and boolean logic"
     )
-    @app_commands.describe(
-        tags="Tag names to match — comma-separated for intersection (e.g. casual, pink)",
-        page="Page number to view (defaults to 1)",
-    )
-    @app_commands.autocomplete(tags=tag_autocomplete)
-    async def search_lookbook(self, interaction: discord.Interaction, tags: str, page: int = 1):
-        """Queries the database and displays looks matching all requested tags."""
+    async def search_lookbook(self, interaction: discord.Interaction):
+        """Displays interactive form where users select tags and search mode."""
         try:
-            await interaction.response.defer()
+            await interaction.response.defer(ephemeral=True)
 
-            tag_names = parse_tag_string(tags)
-            if not tag_names:
+            tags = await db.get_tags(interaction.guild.id)
+            if not tags:
                 await interaction.followup.send(
-                    "❌ Provide at least one tag name (e.g. `casual` or `casual, pink`).",
+                    "❌ No tags exist in this server yet. Ask an admin to create tags with `/tag_create`.",
                     ephemeral=True,
                 )
                 return
 
-            if len(tag_names) > 25:
-                await interaction.followup.send("❌ You can search with at most 25 tags.", ephemeral=True)
-                return
-
-            server_id = interaction.guild.id
-
-            _, missing = await db.resolve_tag_names(server_id, tag_names)
-            if missing:
-                await interaction.followup.send(
-                    f"❌ Unknown tags: {', '.join(f'`#{n}`' for n in missing)}",
-                    ephemeral=True,
-                )
-                return
-
-            limit = 5
-            if page < 1:
-                page = 1
-            offset = (page - 1) * limit
-
-            looks, total_count, _ = await db.search_tags_intersection(
-                server_id, tag_names, limit=limit, offset=offset
+            view = SearchFormView(interaction.user.id, tags)
+            embed = discord.Embed(
+                title="🔍 Lookbook Tag Search Panel",
+                description=(
+                    "Use the dropdown select menu below to pick one or more tags.\n"
+                    "Toggle the search mode button to change matching behavior:\n"
+                    "• **AND Mode**: Matches looks containing **all** selected tags.\n"
+                    "• **OR Mode**: Matches looks containing **at least one** selected tag.\n\n"
+                    "Click **Search** to view results."
+                ),
+                color=discord.Color.blue()
             )
-
-            if not looks:
-                tag_label = " AND ".join(f"`#{n}`" for n in tag_names)
-                await interaction.followup.send(
-                    f"📌 No looks match {tag_label} yet! Use `/look_submit` to add one.",
-                    ephemeral=True,
-                )
-                return
-
-            total_pages = max(1, math.ceil(total_count / limit))
-            if page > total_pages:
-                offset = (total_pages - 1) * limit
-                looks, total_count, _ = await db.search_tags_intersection(
-                    server_id, tag_names, limit=limit, offset=offset
-                )
-                page = total_pages
-
-            embed = create_search_results_embed(
-                tag_names, looks, page, total_pages, total_count, interaction.guild.id
-            )
-
-            view = TagPaginationView(
-                author_id=interaction.user.id,
-                tag_names=tag_names,
-                server_id=server_id,
-                guild_id=interaction.guild.id,
-                current_page=page,
-                total_pages=total_pages,
-            )
-
-            await interaction.followup.send(embed=embed, view=view)
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
         except Exception as e:
-            print(f"❌ Critical crash caught inside tag_search: {e}")
-            try:
-                await interaction.followup.send(
-                    "❌ An unexpected error occurred while processing your lookbook search.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
+            print(f"❌ Error in tag_search command: {e}")
+            await interaction.followup.send("❌ Failed to initialize search panel.", ephemeral=True)
+
+    @app_commands.command(name="help", description="Show help instructions for using the bot")
+    async def help_command(self, interaction: discord.Interaction):
+        """Show bot help information"""
+        try:
+            await interaction.response.defer(ephemeral=True)
+
+            embed = discord.Embed(
+                title="📖 Tag Library Help Guide",
+                description="Welcome to the Discord Tag Library bot! Here is a guide on how to configure and use the bot.",
+                color=discord.Color.blue()
+            )
+
+            embed.add_field(
+                name="🔧 Admin Configuration",
+                value=(
+                    "• `/look_setup action:Add channel channel:#name`\n"
+                    "  Enable look submissions inside the specified channel.\n"
+                    "• `/look_setup action:Remove channel channel:#name`\n"
+                    "  Disable look submissions inside the specified channel.\n"
+                    "• `/look_setup action:List channels`\n"
+                    "  List all allowed look submission channels."
+                ),
+                inline=False
+            )
+
+            embed.add_field(
+                name="🏷️ Tag Management",
+                value=(
+                    "• `/tag_create name:tagName`\n"
+                    "  Create a new tag to label looks.\n"
+                    "• `/tag_list`\n"
+                    "  Show all available tags in this server along with their look count.\n"
+                    "• `/tag_delete name:tagName`\n"
+                    "  Delete a tag from the server (requires Manage Server permission)."
+                ),
+                inline=False
+            )
+
+            embed.add_field(
+                name="📸 Submitting Looks",
+                value=(
+                    "• `/look_submit image:[upload] comp_name:Name`\n"
+                    "  Submit a new lookbook entry inside an allowlisted channel.\n"
+                    "• **Form-Based Controls** (buttons attached to posts):\n"
+                    "  - **Edit Title**: Click to rename the look name using a modal popup.\n"
+                    "  - **Edit Tags**: Click to assign or modify tags using a multiselect dropdown."
+                ),
+                inline=False
+            )
+
+            embed.add_field(
+                name="🔍 Searching the Lookbook",
+                value=(
+                    "• `/tag_search`\n"
+                    "  Brings up an interactive search form where you can choose tags from a dropdown, toggle search modes (**AND** matching all tags vs **OR** matching any tag), and browse the results as a paginated image gallery."
+                ),
+                inline=False
+            )
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            print(f"❌ Error in help_command: {e}")
+            await interaction.followup.send("❌ An error occurred displaying help.", ephemeral=True)
 
 
 async def setup(bot):

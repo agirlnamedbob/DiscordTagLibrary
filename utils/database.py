@@ -324,8 +324,8 @@ class Database:
                 ''', look_id)
 
     # SEARCH OPERATIONS
-    async def search_tags_intersection(self, server_id, tag_names, limit=5, offset=0):
-        """Find looks matching ALL requested tags (intersection)."""
+    async def search_looks(self, server_id, tag_names, mode="AND", limit=5, offset=0):
+        """Find looks matching requested tags (AND = intersection, OR = union)."""
         unique_names = list(dict.fromkeys(
             name.lower().strip().lstrip("#") for name in tag_names if name and name.strip()
         ))
@@ -338,10 +338,14 @@ class Database:
                 WHERE server_id = $1 AND tag_name = ANY($2::text[])
             ''', server_id, unique_names)
 
-            if resolved_count != len(unique_names):
+            if not resolved_count or resolved_count == 0:
                 return [], 0, unique_names
 
-            looks = await conn.fetch('''
+            # If mode is AND, we must match all resolved tags.
+            # If mode is OR, we must match at least 1 resolved tag.
+            having_clause = "HAVING COUNT(DISTINCT lt.tag_id) = (SELECT n FROM resolved_count)" if mode == "AND" else "HAVING COUNT(DISTINCT lt.tag_id) >= 1"
+
+            looks = await conn.fetch(f'''
                 WITH requested AS (
                     SELECT tag_id FROM tags
                     WHERE server_id = $1 AND tag_name = ANY($2::text[])
@@ -365,12 +369,12 @@ class Database:
                   AND lt.tag_id IN (SELECT tag_id FROM requested)
                 GROUP BY l.look_id, l.bot_message_id, l.channel_id, l.image_url,
                          l.comp_name, l.submitted_by, l.created_at
-                HAVING COUNT(DISTINCT lt.tag_id) = (SELECT n FROM resolved_count)
+                {having_clause}
                 ORDER BY l.created_at DESC
                 LIMIT $3 OFFSET $4
             ''', server_id, unique_names, limit, offset)
 
-            total = await conn.fetchval('''
+            total = await conn.fetchval(f'''
                 WITH requested AS (
                     SELECT tag_id FROM tags
                     WHERE server_id = $1 AND tag_name = ANY($2::text[])
@@ -385,11 +389,20 @@ class Database:
                     WHERE l.server_id = $1
                       AND lt.tag_id IN (SELECT tag_id FROM requested)
                     GROUP BY l.look_id
-                    HAVING COUNT(DISTINCT lt.tag_id) = (SELECT n FROM n)
+                    {having_clause}
                 ) sub
             ''', server_id, unique_names)
 
             return looks, total, unique_names
+
+    async def update_look_name(self, look_id, comp_name):
+        """Update a look's competition name"""
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                UPDATE looks
+                SET comp_name = $2, updated_at = NOW()
+                WHERE look_id = $1
+            ''', look_id, comp_name)
 
 
 db = Database()

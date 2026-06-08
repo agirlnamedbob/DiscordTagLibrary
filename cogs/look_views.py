@@ -91,6 +91,47 @@ class EditTagsView(discord.ui.View):
         self.stop()
 
 
+class EditTitleModal(discord.ui.Modal, title="Edit Competition Name"):
+    comp_name_input = discord.ui.TextInput(
+        label="Competition Name",
+        placeholder="Enter competition name...",
+        min_length=1,
+        max_length=100,
+        required=True,
+    )
+
+    def __init__(self, look_id: int, current_name: str):
+        super().__init__()
+        self.look_id = look_id
+        self.comp_name_input.default = current_name
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        new_name = self.comp_name_input.value.strip()
+        if not new_name:
+            await interaction.followup.send("❌ Name cannot be empty.", ephemeral=True)
+            return
+
+        try:
+            await db.update_look_name(self.look_id, new_name)
+        except Exception as e:
+            print(f"❌ Error updating look title: {e}")
+            await interaction.followup.send("❌ Failed to update title. Please try again.", ephemeral=True)
+            return
+
+        look = await db.get_look(self.look_id)
+        tag_rows = await db.get_look_tag_names(self.look_id)
+        embed = create_look_embed(look, tag_rows, interaction.guild.id)
+
+        try:
+            # Edit the message with the updated embed title
+            await interaction.message.edit(embed=embed)
+            await interaction.followup.send("✅ Title updated!", ephemeral=True)
+        except Exception as e:
+            print(f"❌ Error editing look message: {e}")
+            await interaction.followup.send("✅ Title updated in database, but look message could not be edited.", ephemeral=True)
+
+
 class LookManageView(discord.ui.View):
     """Persistent view attached to look posts."""
 
@@ -98,13 +139,36 @@ class LookManageView(discord.ui.View):
         super().__init__(timeout=None)
         self.look_id = look_id
 
-        button = discord.ui.Button(
+        # Edit Title button
+        title_btn = discord.ui.Button(
+            label="Edit Title",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"look_edit_title:{look_id}",
+        )
+        title_btn.callback = self.edit_title_callback
+        self.add_item(title_btn)
+
+        # Edit Tags button (retains custom_id for backward compatibility)
+        tags_btn = discord.ui.Button(
             label="Edit Tags",
             style=discord.ButtonStyle.secondary,
             custom_id=f"look_edit:{look_id}",
         )
-        button.callback = self.edit_tags_callback
-        self.add_item(button)
+        tags_btn.callback = self.edit_tags_callback
+        self.add_item(tags_btn)
+
+    async def edit_title_callback(self, interaction: discord.Interaction):
+        look = await db.get_look(self.look_id)
+        if not look or not look['bot_message_id']:
+            await interaction.response.send_message(
+                "❌ This look no longer exists.",
+                ephemeral=True,
+            )
+            return
+
+        current_name = look['comp_name'] or ""
+        modal = EditTitleModal(self.look_id, current_name)
+        await interaction.response.send_modal(modal)
 
     async def edit_tags_callback(self, interaction: discord.Interaction):
         look = await db.get_look(self.look_id)

@@ -44,16 +44,12 @@ def create_look_embed(look, tags, guild_id, attachment_filename=None):
     tag_line = format_tag_list(tags)
 
     embed = discord.Embed(
-        title="✨ Lookbook Entry",
-        description=comp_name,
+        title=comp_name,
         color=discord.Color.from_rgb(255, 182, 193),
         timestamp=look['created_at']
     )
     embed.add_field(name="Tags", value=tag_line, inline=False)
     embed.add_field(name="Submitted by", value=f"<@{look['submitted_by']}>", inline=True)
-    if look['bot_message_id']:
-        jump_url = build_gallery_jump_url(guild_id, look['channel_id'], look['bot_message_id'])
-        embed.add_field(name="View post", value=f"[Jump to message]({jump_url})", inline=True)
 
     # Prevent duplicate rendering by referencing the attachment
     image_url = None
@@ -69,7 +65,27 @@ def create_look_embed(look, tags, guild_id, attachment_filename=None):
     if image_url:
         embed.set_image(url=image_url)
 
-    embed.set_footer(text=f"Look #{look['look_id']}")
+    return embed
+
+
+def create_search_gallery_embed(look, tags, page, total_count, mode, tag_names):
+    """Create an embed showing a single look in a gallery view."""
+    comp_name = look['comp_name'] or "No name"
+    tag_line = format_tag_list(tags)
+    tag_label = f" {mode} ".join(f"#{name}" for name in tag_names)
+
+    embed = discord.Embed(
+        title=comp_name,
+        color=discord.Color.green(),
+        timestamp=look['created_at']
+    )
+    embed.add_field(name="Tags", value=tag_line, inline=False)
+    embed.add_field(name="Submitted by", value=f"<@{look['submitted_by']}>", inline=True)
+
+    if look['image_url']:
+        embed.set_image(url=look['image_url'])
+
+    embed.set_footer(text=f"Search: {tag_label} | Result {page} of {total_count}")
     return embed
 
 
