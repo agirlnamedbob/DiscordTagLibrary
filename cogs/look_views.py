@@ -138,13 +138,17 @@ class LookViews(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+        self.views_loaded = False
 
     @commands.Cog.listener()
     async def on_ready(self):
+        if self.views_loaded:
+            return
         for guild in self.bot.guilds:
             looks = await db.get_all_looks(guild.id)
             for row in looks:
                 self.bot.add_view(LookManageView(row['look_id']))
+        self.views_loaded = True
         print("✅ Registered persistent look views")
 
 

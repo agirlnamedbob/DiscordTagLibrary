@@ -26,14 +26,11 @@ class Database:
                     tag_id SERIAL PRIMARY KEY,
                     server_id BIGINT NOT NULL,
                     tag_name VARCHAR(50) NOT NULL,
-                    tag_color VARCHAR(7),
                     created_by BIGINT,
                     created_date TIMESTAMP DEFAULT NOW(),
                     UNIQUE(server_id, tag_name)
                 )
             ''')
-
-            await conn.execute('DROP TABLE IF EXISTS message_tags CASCADE')
 
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS looks (
@@ -42,12 +39,27 @@ class Database:
                     channel_id BIGINT NOT NULL,
                     bot_message_id BIGINT,
                     image_url TEXT,
-                    caption TEXT,
+                    comp_name TEXT,
                     submitted_by BIGINT NOT NULL,
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW(),
                     UNIQUE(server_id, bot_message_id)
                 )
+            ''')
+
+            # Run migrations to update older schemas
+            await conn.execute('ALTER TABLE tags DROP COLUMN IF EXISTS tag_color')
+            await conn.execute('''
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 
+                        FROM information_schema.columns 
+                        WHERE table_name='looks' AND column_name='caption'
+                    ) THEN
+                        ALTER TABLE looks RENAME COLUMN caption TO comp_name;
+                    END IF;
+                END $$;
             ''')
 
             await conn.execute('''
@@ -137,15 +149,15 @@ class Database:
             return result.endswith("1")
 
     # TAG OPERATIONS
-    async def create_tag(self, server_id, tag_name, tag_color, created_by):
+    async def create_tag(self, server_id, tag_name, created_by):
         """Create a new tag"""
         async with self.pool.acquire() as conn:
             try:
                 tag_id = await conn.fetchval('''
-                    INSERT INTO tags (server_id, tag_name, tag_color, created_by)
-                    VALUES ($1, $2, $3, $4)
+                    INSERT INTO tags (server_id, tag_name, created_by)
+                    VALUES ($1, $2, $3)
                     RETURNING tag_id
-                ''', server_id, tag_name, tag_color, created_by)
+                ''', server_id, tag_name, created_by)
                 return tag_id
             except asyncpg.UniqueViolationError:
                 return None
@@ -154,16 +166,26 @@ class Database:
         """Get all tags in a server with look counts"""
         async with self.pool.acquire() as conn:
             tags = await conn.fetch('''
-                SELECT t.tag_id, t.tag_name, t.tag_color, t.created_date,
+                SELECT t.tag_id, t.tag_name, t.created_date,
                        COUNT(DISTINCT lt.look_id) AS look_count
                 FROM tags t
                 LEFT JOIN look_tags lt ON t.tag_id = lt.tag_id
                 LEFT JOIN looks l ON lt.look_id = l.look_id AND l.server_id = t.server_id
                 WHERE t.server_id = $1
-                GROUP BY t.tag_id, t.tag_name, t.tag_color, t.created_date
+                GROUP BY t.tag_id, t.tag_name, t.created_date
                 ORDER BY t.created_date DESC
             ''', server_id)
             return tags
+
+    async def get_tag_names(self, server_id):
+        """Get only tag names in a server for autocomplete (highly optimized)"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch('''
+                SELECT tag_name FROM tags
+                WHERE server_id = $1
+                ORDER BY tag_name ASC
+            ''', server_id)
+            return [row['tag_name'] for row in rows]
 
     async def delete_tag(self, server_id, tag_name):
         """Delete a tag"""
@@ -204,14 +226,14 @@ class Database:
         return tag_ids, missing
 
     # LOOK OPERATIONS
-    async def create_look(self, server_id, channel_id, caption, submitted_by, image_url=None):
+    async def create_look(self, server_id, channel_id, comp_name, submitted_by, image_url=None):
         """Insert a look row before the channel message is posted."""
         async with self.pool.acquire() as conn:
             look_id = await conn.fetchval('''
-                INSERT INTO looks (server_id, channel_id, caption, submitted_by, image_url)
+                INSERT INTO looks (server_id, channel_id, comp_name, submitted_by, image_url)
                 VALUES ($1, $2, $3, $4, $5)
                 RETURNING look_id
-            ''', server_id, channel_id, caption, submitted_by, image_url)
+            ''', server_id, channel_id, comp_name, submitted_by, image_url)
             return look_id
 
     async def update_look_message_id(self, look_id, bot_message_id, image_url=None):
@@ -252,7 +274,7 @@ class Database:
         """Return tag names attached to a look."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch('''
-                SELECT t.tag_id, t.tag_name, t.tag_color
+                SELECT t.tag_id, t.tag_name
                 FROM look_tags lt
                 JOIN tags t ON t.tag_id = lt.tag_id
                 WHERE lt.look_id = $1
@@ -332,7 +354,7 @@ class Database:
                     l.bot_message_id,
                     l.channel_id,
                     l.image_url,
-                    l.caption,
+                    l.comp_name,
                     l.submitted_by,
                     l.created_at,
                     array_agg(DISTINCT t.tag_name ORDER BY t.tag_name) AS matched_tags
@@ -342,7 +364,7 @@ class Database:
                 WHERE l.server_id = $1
                   AND lt.tag_id IN (SELECT tag_id FROM requested)
                 GROUP BY l.look_id, l.bot_message_id, l.channel_id, l.image_url,
-                         l.caption, l.submitted_by, l.created_at
+                         l.comp_name, l.submitted_by, l.created_at
                 HAVING COUNT(DISTINCT lt.tag_id) = (SELECT n FROM resolved_count)
                 ORDER BY l.created_at DESC
                 LIMIT $3 OFFSET $4

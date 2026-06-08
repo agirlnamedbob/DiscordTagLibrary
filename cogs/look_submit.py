@@ -5,18 +5,7 @@ from io import BytesIO
 from utils.database import db
 from utils.embeds import create_look_embed
 from cogs.look_views import LookManageView
-
-
-def parse_tag_string(tags: str | None) -> list[str]:
-    """Parse comma- or space-separated tag names."""
-    if not tags:
-        return []
-    parts = []
-    for chunk in tags.replace(",", " ").split():
-        cleaned = chunk.strip().lstrip("#").lower()
-        if cleaned:
-            parts.append(cleaned)
-    return list(dict.fromkeys(parts))
+from utils.helpers import parse_tag_string
 
 
 def is_image_attachment(attachment: discord.Attachment) -> bool:
@@ -41,7 +30,7 @@ async def post_look_message(
     """Post a look embed publicly in the given channel."""
     look = await db.get_look(look_id)
     tag_rows = await db.get_look_tag_names(look_id)
-    embed = create_look_embed(look, tag_rows, guild.id)
+    embed = create_look_embed(look, tag_rows, guild.id, attachment_filename=filename)
 
     file = discord.File(fp=BytesIO(image_bytes), filename=filename)
     view = LookManageView(look_id)
@@ -54,7 +43,7 @@ async def post_look_message(
 
     look = await db.get_look(look_id)
     tag_rows = await db.get_look_tag_names(look_id)
-    await message.edit(embed=create_look_embed(look, tag_rows, guild.id), view=view)
+    await message.edit(embed=create_look_embed(look, tag_rows, guild.id, attachment_filename=filename), view=view)
 
     return message
 
@@ -72,7 +61,7 @@ class LookSubmit(commands.Cog):
         user_id: int,
         image_bytes: bytes,
         filename: str,
-        caption: str | None,
+        comp_name: str | None,
         tag_names: list[str],
     ) -> tuple[discord.Message | None, str | None]:
         """Core ingestion logic: post publicly in the invoke channel."""
@@ -92,7 +81,7 @@ class LookSubmit(commands.Cog):
         look_id = await db.create_look(
             server_id=guild.id,
             channel_id=channel_id,
-            caption=caption,
+            comp_name=comp_name,
             submitted_by=user_id,
         )
 
@@ -117,7 +106,7 @@ class LookSubmit(commands.Cog):
             await db.add_look_tags(look_id, tag_ids, user_id)
             look = await db.get_look(look_id)
             tag_rows = await db.get_look_tag_names(look_id)
-            embed = create_look_embed(look, tag_rows, guild.id)
+            embed = create_look_embed(look, tag_rows, guild.id, attachment_filename=filename)
             await message.edit(embed=embed, view=LookManageView(look_id))
 
         return message, None
@@ -125,14 +114,14 @@ class LookSubmit(commands.Cog):
     @app_commands.command(name="look_submit", description="Submit a look to the lookbook")
     @app_commands.describe(
         image="Image attachment for your look",
-        caption="Optional caption or description",
+        comp_name="Name of the competition/look (e.g. Winter Wonderland)",
         tags="Comma-separated tag names (e.g. casual, pink)",
     )
     async def look_submit(
         self,
         interaction: discord.Interaction,
         image: discord.Attachment,
-        caption: str = None,
+        comp_name: str = None,
         tags: str = None,
     ):
         if not is_image_attachment(image):
@@ -176,7 +165,7 @@ class LookSubmit(commands.Cog):
             interaction.user.id,
             image_bytes,
             image.filename,
-            caption,
+            comp_name,
             tag_names,
         )
 

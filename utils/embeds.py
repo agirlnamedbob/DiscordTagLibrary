@@ -38,14 +38,14 @@ def create_tag_list_embed(tags, server_name):
     return embed
 
 
-def create_look_embed(look, tags, guild_id):
+def create_look_embed(look, tags, guild_id, attachment_filename=None):
     """Create the embed for a bot-owned look post."""
-    caption = look['caption'] or "No caption"
+    comp_name = look['comp_name'] or "No name"
     tag_line = format_tag_list(tags)
 
     embed = discord.Embed(
         title="✨ Lookbook Entry",
-        description=caption,
+        description=comp_name,
         color=discord.Color.from_rgb(255, 182, 193),
         timestamp=look['created_at']
     )
@@ -55,8 +55,19 @@ def create_look_embed(look, tags, guild_id):
         jump_url = build_gallery_jump_url(guild_id, look['channel_id'], look['bot_message_id'])
         embed.add_field(name="View post", value=f"[Jump to message]({jump_url})", inline=True)
 
-    if look['image_url']:
-        embed.set_image(url=look['image_url'])
+    # Prevent duplicate rendering by referencing the attachment
+    image_url = None
+    if attachment_filename:
+        image_url = f"attachment://{attachment_filename}"
+    elif look['image_url']:
+        if "cdn.discordapp.com/attachments/" in look['image_url'] or "media.discordapp.net/attachments/" in look['image_url']:
+            filename = look['image_url'].split('/')[-1].split('?')[0]
+            image_url = f"attachment://{filename}"
+        else:
+            image_url = look['image_url']
+
+    if image_url:
+        embed.set_image(url=image_url)
 
     embed.set_footer(text=f"Look #{look['look_id']}")
     return embed
@@ -80,7 +91,7 @@ def create_search_results_embed(tag_names, looks, page, total_pages, total_count
         embed.set_image(url=looks[0]['image_url'])
 
     for index, look in enumerate(looks):
-        caption = look['caption'] or "No description"
+        comp_name = look['comp_name'] or "No name"
         curator = f"<@{look['submitted_by']}>"
         jump_url = build_gallery_jump_url(guild_id, look['channel_id'], look['bot_message_id'])
         matched = look['matched_tags']
@@ -90,7 +101,7 @@ def create_search_results_embed(tag_names, looks, page, total_pages, total_count
             tag_str = "_none_"
 
         field_value = (
-            f"📝 **Details:** {caption}\n"
+            f"📝 **Comp Name:** {comp_name}\n"
             f"🏷️ **Tags:** {tag_str}\n"
             f"👤 **Submitted by:** {curator}\n"
             f"✨ [View post]({jump_url})"

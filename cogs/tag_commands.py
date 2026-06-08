@@ -4,16 +4,7 @@ from discord.ext import commands
 from discord import app_commands
 from utils.database import db
 from utils.embeds import create_tag_list_embed, create_search_results_embed
-
-
-def parse_search_tags(tags: str) -> list[str]:
-    """Parse comma- or space-separated tag names for intersection search."""
-    parts = []
-    for chunk in tags.replace(",", " ").split():
-        cleaned = chunk.strip().lstrip("#").lower()
-        if cleaned:
-            parts.append(cleaned)
-    return list(dict.fromkeys(parts))
+from utils.helpers import parse_tag_string
 
 
 class TagPaginationView(discord.ui.View):
@@ -73,10 +64,9 @@ class TagCommands(commands.Cog):
 
     @app_commands.command(name="tag_create", description="Create a new tag")
     @app_commands.describe(
-        name="Tag name (e.g., 'business', 'fantasy')",
-        color="Optional hex color (e.g., #FF69B4)"
+        name="Tag name (e.g., 'business', 'fantasy')"
     )
-    async def create_tag(self, interaction: discord.Interaction, name: str, color: str = None):
+    async def create_tag(self, interaction: discord.Interaction, name: str):
         """Create a new tag"""
         try:
             await interaction.response.defer()
@@ -92,13 +82,9 @@ class TagCommands(commands.Cog):
                 )
                 return
 
-            if color and not color.startswith("#"):
-                color = f"#{color}"
-
             tag_id = await db.create_tag(
                 server_id=interaction.guild.id,
                 tag_name=name.lower(),
-                tag_color=color,
                 created_by=interaction.user.id
             )
 
@@ -160,12 +146,12 @@ class TagCommands(commands.Cog):
     async def tag_autocomplete(self, interaction: discord.Interaction, current: str):
         """Autocompletes available workspace tags as the user types"""
         try:
-            tags = await db.get_tags(interaction.guild.id)
-            if not tags:
+            tag_names = await db.get_tag_names(interaction.guild.id)
+            if not tag_names:
                 return []
             return [
-                app_commands.Choice(name=f"#{tag['tag_name']}", value=tag['tag_name'])
-                for tag in tags if current.lower() in tag['tag_name'].lower()
+                app_commands.Choice(name=f"#{name}", value=name)
+                for name in tag_names if current.lower() in name.lower()
             ][:25]
         except Exception as e:
             print(f"❌ Error in tag_autocomplete: {e}")
@@ -185,7 +171,7 @@ class TagCommands(commands.Cog):
         try:
             await interaction.response.defer()
 
-            tag_names = parse_search_tags(tags)
+            tag_names = parse_tag_string(tags)
             if not tag_names:
                 await interaction.followup.send(
                     "❌ Provide at least one tag name (e.g. `casual` or `casual, pink`).",
