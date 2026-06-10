@@ -14,7 +14,7 @@ def format_tag_list(tags):
 
     styles = [t['tag_name'] for t in tags if t.get('category') == 'Style']
     look_tags = [t['tag_name'] for t in tags if t.get('category') == 'Tag']
-    others = [t['tag_name'] for t in tags if t.get('category') == 'Other']
+    others = [t['tag_name'] for t in tags if t.get('category') in ['Custom', 'Other']]
 
     lines = []
     if styles:
@@ -22,7 +22,7 @@ def format_tag_list(tags):
     if look_tags:
         lines.append("**Tags:** " + " ".join(f"`#{t}`" for t in look_tags))
     if others:
-        lines.append("**Other:** " + " ".join(f"`#{t}`" for t in others))
+        lines.append("**Custom:** " + " ".join(f"`#{t}`" for t in others))
     
     return "\n".join(lines)
 
@@ -39,14 +39,18 @@ def create_tag_list_embed(tags, server_name):
         embed.description = "No tags created yet. Use `/tag_create` to start!"
         return embed
 
-    for tag in tags:
-        tag_name = tag['tag_name']
-        count = tag['look_count'] or 0
-        embed.add_field(
-            name=f"#{tag_name}",
-            value=f"`{count}` looks",
-            inline=True
-        )
+    styles = [t for t in tags if t.get('category') == 'Style']
+    look_tags = [t for t in tags if t.get('category') == 'Tag']
+    customs = [t for t in tags if t.get('category') in ['Custom', 'Other']]
+
+    style_val = "\n".join(f"• `#{t['tag_name']}` ({t['look_count'] or 0} looks)" for t in styles) if styles else "_None_"
+    embed.add_field(name="Style", value=style_val, inline=False)
+
+    tag_val = "\n".join(f"• `#{t['tag_name']}` ({t['look_count'] or 0} looks)" for t in look_tags) if look_tags else "_None_"
+    embed.add_field(name="Tag", value=tag_val, inline=False)
+
+    custom_val = "\n".join(f"• `#{t['tag_name']}` ({t['look_count'] or 0} looks)" for t in customs) if customs else "_None_"
+    embed.add_field(name="Custom", value=custom_val, inline=False)
 
     return embed
 
@@ -54,14 +58,21 @@ def create_tag_list_embed(tags, server_name):
 def create_look_embed(look, tags, guild_id, attachment_filename=None):
     """Create the embed for a bot-owned look post."""
     comp_name = look['comp_name'] or "No name"
-    tag_line = format_tag_list(tags)
 
     embed = discord.Embed(
         title=comp_name,
         color=discord.Color.from_rgb(255, 182, 193),
         timestamp=look['created_at']
     )
-    embed.add_field(name="Tags", value=tag_line, inline=False)
+    
+    styles = [t['tag_name'] for t in tags if t.get('category') == 'Style']
+    look_tags = [t['tag_name'] for t in tags if t.get('category') == 'Tag']
+    customs = [t['tag_name'] for t in tags if t.get('category') in ['Custom', 'Other']]
+
+    embed.add_field(name="Style", value=", ".join(f"`#{t}`" for t in styles) if styles else "_None_", inline=False)
+    embed.add_field(name="Tag", value=", ".join(f"`#{t}`" for t in look_tags) if look_tags else "_None_", inline=False)
+    embed.add_field(name="Custom", value=", ".join(f"`#{t}`" for t in customs) if customs else "_None_", inline=False)
+    
     embed.add_field(name="Submitted by", value=f"<@{look['submitted_by']}>", inline=True)
 
     if attachment_filename:
@@ -73,7 +84,6 @@ def create_look_embed(look, tags, guild_id, attachment_filename=None):
 def create_search_gallery_embed(look, tags, page, total_count, mode, tag_names, guild_id):
     """Create an embed showing a single look in a gallery view."""
     comp_name = look['comp_name'] or "No name"
-    tag_line = format_tag_list(tags)
     tag_label = f" {mode} ".join(f"#{name}" for name in tag_names)
 
     embed = discord.Embed(
@@ -81,7 +91,15 @@ def create_search_gallery_embed(look, tags, page, total_count, mode, tag_names, 
         color=discord.Color.green(),
         timestamp=look['created_at']
     )
-    embed.add_field(name="Tags", value=tag_line, inline=False)
+    
+    styles = [t['tag_name'] for t in tags if t.get('category') == 'Style']
+    look_tags = [t['tag_name'] for t in tags if t.get('category') == 'Tag']
+    customs = [t['tag_name'] for t in tags if t.get('category') in ['Custom', 'Other']]
+
+    embed.add_field(name="Style", value=", ".join(f"`#{t}`" for t in styles) if styles else "_None_", inline=False)
+    embed.add_field(name="Tag", value=", ".join(f"`#{t}`" for t in look_tags) if look_tags else "_None_", inline=False)
+    embed.add_field(name="Custom", value=", ".join(f"`#{t}`" for t in customs) if customs else "_None_", inline=False)
+
     embed.add_field(name="Submitted by", value=f"<@{look['submitted_by']}>", inline=True)
 
     if look['bot_message_id']:
@@ -92,9 +110,9 @@ def create_search_gallery_embed(look, tags, page, total_count, mode, tag_names, 
     return embed
 
 
-def create_search_results_embed(tag_names, looks, page, total_pages, total_count, guild_id):
+def create_search_results_embed(tag_names, looks, page, total_pages, total_count, guild_id, mode="AND"):
     """Create embed showing intersection search results."""
-    tag_label = " AND ".join(f"#{name}" for name in tag_names)
+    tag_label = f" {mode} ".join(f"#{name}" for name in tag_names)
     embed = discord.Embed(
         title=f"🔍 Lookbook Search: {tag_label}",
         description=f"Found {total_count} matching looks (Page {page}/{total_pages})",

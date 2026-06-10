@@ -26,7 +26,7 @@ class Database:
                     tag_id SERIAL PRIMARY KEY,
                     server_id BIGINT NOT NULL,
                     tag_name VARCHAR(50) NOT NULL,
-                    category VARCHAR(20) DEFAULT 'Other',
+                    category VARCHAR(20) DEFAULT 'Custom',
                     created_by BIGINT,
                     created_date TIMESTAMP DEFAULT NOW(),
                     UNIQUE(server_id, tag_name)
@@ -59,7 +59,9 @@ class Database:
             if column_exists:
                 await conn.execute('ALTER TABLE looks RENAME COLUMN caption TO comp_name')
 
-            await conn.execute("ALTER TABLE tags ADD COLUMN IF NOT EXISTS category VARCHAR(20) DEFAULT 'Other'")
+            await conn.execute("ALTER TABLE tags ADD COLUMN IF NOT EXISTS category VARCHAR(20) DEFAULT 'Custom'")
+            await conn.execute("ALTER TABLE tags ALTER COLUMN category SET DEFAULT 'Custom'")
+            await conn.execute("UPDATE tags SET category = 'Custom' WHERE category = 'Other'")
             await conn.execute('ALTER TABLE looks DROP COLUMN IF EXISTS image_url')
 
             await conn.execute('''
@@ -148,14 +150,33 @@ class Database:
             ''', server_id, channel_id)
             return result.endswith("1")
 
+    async def ensure_hardcoded_tags(self, server_id):
+        """Ensure all hardcoded tags exist in the database for the server."""
+        from config import HARDCODED_STYLES, HARDCODED_TAGS
+        
+        async with self.pool.acquire() as conn:
+            to_insert = []
+            for tag in HARDCODED_STYLES:
+                to_insert.append((server_id, tag.lower().strip(), 'Style', None))
+            for tag in HARDCODED_TAGS:
+                to_insert.append((server_id, tag.lower().strip(), 'Tag', None))
+                
+            if to_insert:
+                await conn.executemany('''
+                    INSERT INTO tags (server_id, tag_name, category, created_by)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (server_id, tag_name) DO UPDATE SET category = EXCLUDED.category
+                ''', to_insert)
+
     # TAG OPERATIONS
-    async def create_tag(self, server_id, tag_name, created_by, category='Other'):
+    async def create_tag(self, server_id, tag_name, created_by, category='Custom'):
         """Create a new tag"""
         async with self.pool.acquire() as conn:
             try:
                 tag_id = await conn.fetchval('''
                     INSERT INTO tags (server_id, tag_name, category, created_by)
                     VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (server_id, tag_name) DO UPDATE SET category = EXCLUDED.category
                     RETURNING tag_id
                 ''', server_id, tag_name, category, created_by)
                 return tag_id
@@ -164,6 +185,7 @@ class Database:
 
     async def get_tags(self, server_id):
         """Get all tags in a server with look counts"""
+        await self.ensure_hardcoded_tags(server_id)
         async with self.pool.acquire() as conn:
             tags = await conn.fetch('''
                 SELECT t.tag_id, t.tag_name, t.category, t.created_date,
@@ -172,13 +194,14 @@ class Database:
                 LEFT JOIN look_tags lt ON t.tag_id = lt.tag_id
                 LEFT JOIN looks l ON lt.look_id = l.look_id AND l.server_id = t.server_id
                 WHERE t.server_id = $1
-                GROUP BY t.tag_id, t.tag_name, t.created_date
+                GROUP BY t.tag_id, t.tag_name, t.category, t.created_date
                 ORDER BY t.created_date DESC
             ''', server_id)
             return tags
 
     async def get_tag_names(self, server_id):
         """Get only tag names in a server for autocomplete (highly optimized)"""
+        await self.ensure_hardcoded_tags(server_id)
         async with self.pool.acquire() as conn:
             rows = await conn.fetch('''
                 SELECT tag_name FROM tags
@@ -209,6 +232,8 @@ class Database:
         """Resolve tag names to IDs. Returns (tag_ids, missing_names)."""
         if not tag_names:
             return [], []
+
+        await self.ensure_hardcoded_tags(server_id)
 
         unique_names = list(dict.fromkeys(name.lower().strip().lstrip("#") for name in tag_names if name.strip()))
         if not unique_names:
@@ -371,7 +396,7 @@ class Database:
                     SELECT tag_id FROM tags
                     WHERE server_id = $1 AND tag_name = ANY($2::text[])
                 ),
-                n AS (
+                resolved_count AS (
                     SELECT COUNT(*)::int AS n FROM requested
                 )
                 SELECT COUNT(*) FROM (

@@ -37,7 +37,7 @@ class GalleryPaginationView(discord.ui.View):
 
         if looks:
             embed = create_search_results_embed(
-                self.tag_names, looks, self.current_page, self.total_pages, total_count, guild_id=self.guild_id
+                self.tag_names, looks, self.current_page, self.total_pages, total_count, guild_id=self.guild_id, mode=self.mode
             )
             await interaction.response.edit_message(embed=embed, view=self)
 
@@ -60,80 +60,213 @@ class GalleryPaginationView(discord.ui.View):
         await self.refresh_view(interaction)
 
 
-class SearchTagsSelect(discord.ui.Select):
-    """Dropdown menu for selecting tags in search."""
-
+class TagListSearchDropdown(discord.ui.Select):
     def __init__(self, tags: list):
-        options = [
-            discord.SelectOption(
+        options = []
+        for tag in tags[:25]:  # Discord select menu limit is 25
+            options.append(discord.SelectOption(
                 label=f"#{tag['tag_name']}",
                 value=tag['tag_name'],
-            )
-            for tag in tags[:25]
-        ]
+                description=f"{tag['look_count'] or 0} looks"
+            ))
         super().__init__(
-            placeholder="Select tags to search for...",
-            min_values=1,
-            max_values=min(len(options), 25),
-            options=options,
-            custom_id="search_tags_select",
+            placeholder="Select a tag to search looks...",
+            options=options if options else [discord.SelectOption(label="No tags available", value="none")],
+            custom_id="tag_list_search_select",
+            disabled=not options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.values[0] == "none":
+            await interaction.response.defer()
+            return
+            
+        selected_tag = self.values[0]
+        await interaction.response.defer(ephemeral=True)
+        
+        looks, total_count, _ = await db.search_looks(
+            interaction.guild.id, [selected_tag], mode="AND", limit=5, offset=0
+        )
+        
+        if not looks:
+            await interaction.followup.send(
+                f"📌 No looks match `#{selected_tag}`!",
+                ephemeral=True,
+            )
+            return
+
+        total_pages = math.ceil(total_count / 5) if total_count > 0 else 1
+        embed = create_search_results_embed(
+            [selected_tag], looks, page=1, total_pages=total_pages, total_count=total_count, guild_id=interaction.guild.id, mode="AND"
+        )
+
+        view = GalleryPaginationView(
+            author_id=interaction.user.id,
+            tag_names=[selected_tag],
+            server_id=interaction.guild.id,
+            guild_id=interaction.guild.id,
+            current_page=1,
+            total_pages=total_pages,
+            mode="AND"
+        )
+
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+
+class TagListView(discord.ui.View):
+    def __init__(self, tags: list):
+        super().__init__(timeout=180)
+        if tags:
+            self.add_item(TagListSearchDropdown(tags))
+
+
+class PaginatedSearchTagsSelect(discord.ui.Select):
+    """Dropdown for a specific page of search tags."""
+
+    def __init__(self, page_tags: list, selected_tag_ids: set, category: str, page: int):
+        options = []
+        for tag in page_tags:
+            options.append(discord.SelectOption(
+                label=f"#{tag['tag_name']}",
+                value=str(tag['tag_id']),
+                default=str(tag['tag_id']) in selected_tag_ids,
+            ))
+
+        super().__init__(
+            placeholder=f"Select {category} tags for search (Page {page + 1})...",
+            min_values=0,
+            max_values=min(len(options), 25) if options else 1,
+            options=options if options else [discord.SelectOption(label="No tags in this category", value="none")],
+            custom_id=f"search_tags_select:{category}:{page}",
+            disabled=not options
         )
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
 
 
-class SearchFormView(discord.ui.View):
-    """Search panel view to choose tags and AND/OR mode."""
+class PaginatedSearchFormView(discord.ui.View):
+    """Paginated search panel with Category, Page, and AND/OR mode switching."""
 
-    def __init__(self, author_id: int, tags: list):
+    def __init__(self, author_id: int, all_tags: list):
         super().__init__(timeout=180)
         self.author_id = author_id
+        self.all_tags = all_tags
+        self.selected_tag_ids = set()
+        self.category = "Style"
+        self.page = 0
         self.mode = "AND"
-        self.tags_select = SearchTagsSelect(tags)
-        self.add_item(self.tags_select)
-        self.update_buttons()
+        self.update_components()
 
-    def update_buttons(self):
-        # Clear previous button items
-        for item in list(self.children):
-            if isinstance(item, discord.ui.Button):
-                self.remove_item(item)
+    def sync_selections(self):
+        select = next((item for item in self.children if isinstance(item, PaginatedSearchTagsSelect)), None)
+        if select and not select.disabled:
+            page_option_ids = {opt.value for opt in select.options if opt.value != "none"}
+            selected_ids = set(select.values) if "none" not in select.values else set()
+            self.selected_tag_ids -= page_option_ids
+            self.selected_tag_ids |= selected_ids
 
-        # Add Toggle Mode button
-        mode_label = f"Mode: {self.mode} (Match All)" if self.mode == "AND" else f"Mode: {self.mode} (Match Any)"
-        mode_style = discord.ButtonStyle.green if self.mode == "AND" else discord.ButtonStyle.gray
-        mode_btn = discord.ui.Button(
-            label=mode_label,
-            style=mode_style,
-            custom_id="search_mode_toggle",
-        )
-        mode_btn.callback = self.toggle_mode
-        self.add_item(mode_btn)
+    def make_category_callback(self, cat):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != self.author_id:
+                await interaction.response.send_message("This search form isn't yours!", ephemeral=True)
+                return
+            self.sync_selections()
+            self.category = cat
+            self.page = 0
+            self.update_components()
+            await interaction.response.edit_message(view=self)
+        return callback
 
-        # Add Search button
-        search_btn = discord.ui.Button(
-            label="🔍 Search",
-            style=discord.ButtonStyle.primary,
-            custom_id="search_submit_btn",
-        )
-        search_btn.callback = self.run_search
-        self.add_item(search_btn)
+    async def prev_page(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This search form isn't yours!", ephemeral=True)
+            return
+        self.sync_selections()
+        self.page -= 1
+        self.update_components()
+        await interaction.response.edit_message(view=self)
+
+    async def next_page(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This search form isn't yours!", ephemeral=True)
+            return
+        self.sync_selections()
+        self.page += 1
+        self.update_components()
+        await interaction.response.edit_message(view=self)
 
     async def toggle_mode(self, interaction: discord.Interaction):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("This search form isn't yours!", ephemeral=True)
             return
+        self.sync_selections()
         self.mode = "OR" if self.mode == "AND" else "AND"
-        self.update_buttons()
+        self.update_components()
         await interaction.response.edit_message(view=self)
+
+    def update_components(self):
+        self.clear_items()
+
+        cat_tags = [t for t in self.all_tags if t.get('category', 'Custom') == self.category]
+        total_pages = max(1, math.ceil(len(cat_tags) / 25))
+        if self.page >= total_pages:
+            self.page = total_pages - 1
+            
+        start_idx = self.page * 25
+        page_tags = cat_tags[start_idx:start_idx + 25]
+
+        self.add_item(PaginatedSearchTagsSelect(page_tags, self.selected_tag_ids, self.category, self.page))
+
+        categories = ["Style", "Tag", "Custom"]
+        for cat in categories:
+            btn = discord.ui.Button(
+                label=cat, 
+                style=discord.ButtonStyle.primary if cat == self.category else discord.ButtonStyle.secondary,
+                custom_id=f"search_cat_btn:{cat}",
+                row=1
+            )
+            btn.callback = self.make_category_callback(cat)
+            self.add_item(btn)
+
+        prev_btn = discord.ui.Button(label="⬅️ Prev", style=discord.ButtonStyle.secondary, disabled=(self.page == 0), row=2)
+        prev_btn.callback = self.prev_page
+        self.add_item(prev_btn)
+        
+        next_btn = discord.ui.Button(label="Next ➡️", style=discord.ButtonStyle.secondary, disabled=(self.page >= total_pages - 1), row=2)
+        next_btn.callback = self.next_page
+        self.add_item(next_btn)
+
+        # Toggle Mode button
+        mode_label = f"Mode: {self.mode} (Match All)" if self.mode == "AND" else f"Mode: {self.mode} (Match Any)"
+        mode_style = discord.ButtonStyle.success if self.mode == "AND" else discord.ButtonStyle.secondary
+        mode_btn = discord.ui.Button(
+            label=mode_label,
+            style=mode_style,
+            custom_id="search_mode_toggle_btn",
+            row=3
+        )
+        mode_btn.callback = self.toggle_mode
+        self.add_item(mode_btn)
+
+        search_btn = discord.ui.Button(label="🔍 Search", style=discord.ButtonStyle.primary, row=3)
+        search_btn.callback = self.run_search
+        self.add_item(search_btn)
+
+        cancel_btn = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.danger, row=3)
+        cancel_btn.callback = self.cancel
+        self.add_item(cancel_btn)
 
     async def run_search(self, interaction: discord.Interaction):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("This search form isn't yours!", ephemeral=True)
             return
 
-        selected_names = self.tags_select.values
+        self.sync_selections()
+        
+        # Map selected tag IDs to names
+        selected_names = [t['tag_name'] for t in self.all_tags if str(t['tag_id']) in self.selected_tag_ids]
+        
         if not selected_names:
             await interaction.response.send_message("❌ Please select at least one tag to search.", ephemeral=True)
             return
@@ -154,7 +287,7 @@ class SearchFormView(discord.ui.View):
 
         total_pages = math.ceil(total_count / 5) if total_count > 0 else 1
         embed = create_search_results_embed(
-            selected_names, looks, page=1, total_pages=total_pages, total_count=total_count, guild_id=interaction.guild.id
+            selected_names, looks, page=1, total_pages=total_pages, total_count=total_count, guild_id=interaction.guild.id, mode=self.mode
         )
 
         view = GalleryPaginationView(
@@ -169,29 +302,25 @@ class SearchFormView(discord.ui.View):
 
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
+    async def cancel(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This search form isn't yours!", ephemeral=True)
+            return
+        await interaction.response.send_message("Search cancelled.", ephemeral=True)
+        self.stop()
+
 
 class TagCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="tag_create", description="Create a new tag")
+    @app_commands.command(name="tag_create", description="Create a new tag (goes into Custom category)")
     @app_commands.describe(
-        name="Tag name (e.g., 'business', 'fantasy')",
-        category="Category of the tag (Default: Other)"
+        name="Tag name (e.g., 'business', 'fantasy')"
     )
-    @app_commands.choices(category=[
-        app_commands.Choice(name="Style", value="Style"),
-        app_commands.Choice(name="Tag", value="Tag"),
-        app_commands.Choice(name="Other", value="Other"),
-    ])
-    async def create_tag(self, interaction: discord.Interaction, name: str, category: app_commands.Choice[str] = None):
+    async def create_tag(self, interaction: discord.Interaction, name: str):
         """Create a new tag"""
         try:
-            category_val = category.value if category else "Other"
-            if category_val in ["Style", "Tag"] and not interaction.user.guild_permissions.manage_guild:
-                await interaction.response.send_message("❌ Only Server Admins can create 'Style' and 'Tag' categories.", ephemeral=True)
-                return
-
             await interaction.response.defer()
 
             if len(name) > 50:
@@ -208,14 +337,14 @@ class TagCommands(commands.Cog):
             tag_id = await db.create_tag(
                 server_id=interaction.guild.id,
                 tag_name=name.lower(),
-                category=category_val,
+                category='Custom',
                 created_by=interaction.user.id
             )
 
             if tag_id:
                 embed = discord.Embed(
                     title="✅ Tag Created",
-                    description=f"New tag `#{name.lower()}` is ready to use!",
+                    description=f"New tag `#{name.lower()}` is ready to use in the **Custom** category!",
                     color=discord.Color.green()
                 )
                 await interaction.followup.send(embed=embed)
@@ -230,12 +359,13 @@ class TagCommands(commands.Cog):
     async def list_tags(self, interaction: discord.Interaction):
         """List all tags"""
         try:
-            await interaction.response.defer()
+            await interaction.response.defer(ephemeral=True)
 
             tags = await db.get_tags(interaction.guild.id)
             embed = create_tag_list_embed(tags, interaction.guild.name)
 
-            await interaction.followup.send(embed=embed)
+            view = TagListView(tags)
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         except Exception as e:
             print(f"❌ Error in tag_list: {e}")
             await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
@@ -249,6 +379,11 @@ class TagCommands(commands.Cog):
 
             if not interaction.user.guild_permissions.manage_guild:
                 await interaction.followup.send("❌ You need manage server permissions", ephemeral=True)
+                return
+
+            from config import HARDCODED_STYLES, HARDCODED_TAGS
+            if name.lower().strip() in [s.lower() for s in HARDCODED_STYLES + HARDCODED_TAGS]:
+                await interaction.followup.send("❌ Cannot delete hardcoded Style or Tag options.", ephemeral=True)
                 return
 
             success = await db.delete_tag(interaction.guild.id, name.lower())
@@ -293,16 +428,16 @@ class TagCommands(commands.Cog):
             tags = await db.get_tags(interaction.guild.id)
             if not tags:
                 await interaction.followup.send(
-                    "❌ No tags exist in this server yet. Ask an admin to create tags with `/tag_create`.",
+                    "❌ No tags exist in this server yet.",
                     ephemeral=True,
                 )
                 return
 
-            view = SearchFormView(interaction.user.id, tags)
+            view = PaginatedSearchFormView(interaction.user.id, tags)
             embed = discord.Embed(
                 title="🔍 Lookbook Tag Search Panel",
                 description=(
-                    "Use the dropdown select menu below to pick one or more tags.\n"
+                    "Use the dropdown select menu below to pick one or more tags across categories.\n"
                     "Toggle the search mode button to change matching behavior:\n"
                     "• **AND Mode**: Matches looks containing **all** selected tags.\n"
                     "• **OR Mode**: Matches looks containing **at least one** selected tag.\n\n"

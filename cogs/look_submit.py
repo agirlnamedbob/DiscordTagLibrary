@@ -104,10 +104,10 @@ class LookSubmit(commands.Cog):
             await db.add_look_tags(look_id, tag_ids, user_id)
             look = await db.get_look(look_id)
             tag_rows = await db.get_look_tag_names(look_id)
-            embed = create_look_embed(look, tag_rows, guild.id)
-            if message.attachments:
-                embed.set_image(url=message.attachments[0].url)
-            await message.edit(embed=embed, attachments=message.attachments, view=LookManageView(look_id))
+            
+            filename = message.attachments[0].filename if message.attachments else None
+            embed = create_look_embed(look, tag_rows, guild.id, attachment_filename=filename)
+            await message.edit(embed=embed, view=LookManageView(look_id))
 
         return message, None
 

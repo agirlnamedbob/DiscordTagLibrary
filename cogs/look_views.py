@@ -75,7 +75,7 @@ class PaginatedTagsView(discord.ui.View):
     def update_components(self):
         self.clear_items()
 
-        cat_tags = [t for t in self.all_tags if t.get('category', 'Other') == self.category]
+        cat_tags = [t for t in self.all_tags if t.get('category', 'Custom') == self.category]
         total_pages = max(1, math.ceil(len(cat_tags) / 25))
         if self.page >= total_pages:
             self.page = total_pages - 1
@@ -85,7 +85,7 @@ class PaginatedTagsView(discord.ui.View):
 
         self.add_item(PaginatedEditTagsSelect(self.look_id, page_tags, self.current_tag_ids, self.category, self.page))
 
-        categories = ["Style", "Tag", "Other"]
+        categories = ["Style", "Tag", "Custom"]
         for cat in categories:
             btn = discord.ui.Button(
                 label=cat, 
@@ -132,7 +132,6 @@ class PaginatedTagsView(discord.ui.View):
 
         tag_rows = await db.get_look_tag_names(self.look_id)
         look = await db.get_look(self.look_id)
-        embed = create_look_embed(look, tag_rows, interaction.guild.id)
 
         try:
             channel = interaction.guild.get_channel(look['channel_id'])
@@ -140,10 +139,10 @@ class PaginatedTagsView(discord.ui.View):
                 channel = await interaction.guild.fetch_channel(look['channel_id'])
             look_message = await channel.fetch_message(look['bot_message_id'])
             
-            if look_message.attachments:
-                embed.set_image(url=look_message.attachments[0].url)
+            filename = look_message.attachments[0].filename if look_message.attachments else None
+            embed = create_look_embed(look, tag_rows, interaction.guild.id, attachment_filename=filename)
                 
-            await look_message.edit(embed=embed, attachments=look_message.attachments)
+            await look_message.edit(embed=embed)
         except discord.NotFound:
             await interaction.followup.send("✅ Tags saved, but the look message was deleted.", ephemeral=True)
             return
@@ -190,15 +189,13 @@ class EditTitleModal(discord.ui.Modal, title="Edit Competition Name"):
 
         look = await db.get_look(self.look_id)
         tag_rows = await db.get_look_tag_names(self.look_id)
-        embed = create_look_embed(look, tag_rows, interaction.guild.id)
 
         try:
-            # Inject persistent image URL to avoid NULLing the image on edit
-            if interaction.message.attachments:
-                embed.set_image(url=interaction.message.attachments[0].url)
+            filename = interaction.message.attachments[0].filename if interaction.message.attachments else None
+            embed = create_look_embed(look, tag_rows, interaction.guild.id, attachment_filename=filename)
                 
             # Edit the message with the updated embed title
-            await interaction.message.edit(embed=embed, attachments=interaction.message.attachments)
+            await interaction.message.edit(embed=embed)
             await interaction.followup.send("✅ Title updated!", ephemeral=True)
         except Exception as e:
             print(f"❌ Error editing look message: {e}")
