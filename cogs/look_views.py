@@ -67,7 +67,7 @@ class EditTagsView(discord.ui.View):
             if not channel:
                 channel = await interaction.guild.fetch_channel(look['channel_id'])
             look_message = await channel.fetch_message(look['bot_message_id'])
-            await look_message.edit(embed=embed)
+            await look_message.edit(embed=embed, attachments=look_message.attachments)
         except discord.NotFound:
             await interaction.followup.send(
                 "✅ Tags saved, but the look message was deleted.",
@@ -125,7 +125,7 @@ class EditTitleModal(discord.ui.Modal, title="Edit Competition Name"):
 
         try:
             # Edit the message with the updated embed title
-            await interaction.message.edit(embed=embed)
+            await interaction.message.edit(embed=embed, attachments=interaction.message.attachments)
             await interaction.followup.send("✅ Title updated!", ephemeral=True)
         except Exception as e:
             print(f"❌ Error editing look message: {e}")
