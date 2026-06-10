@@ -41,26 +41,7 @@ async def post_look_message(
 
     message = await channel.send(embed=embed, file=file, view=view)
 
-    # Resolve image URL and filename from attachments, falling back to REST fetch if needed
-    image_url = None
-    actual_filename = filename
-    if message.attachments:
-        image_url = message.attachments[0].url
-        actual_filename = message.attachments[0].filename
-    else:
-        try:
-            fetched = await channel.fetch_message(message.id)
-            if fetched.attachments:
-                image_url = fetched.attachments[0].url
-                actual_filename = fetched.attachments[0].filename
-        except Exception as e:
-            print(f"❌ Error fetching look attachments: {e}")
-
-    await db.update_look_message_id(look_id, message.id, image_url=image_url)
-
-    look = await db.get_look(look_id)
-    tag_rows = await db.get_look_tag_names(look_id)
-    await message.edit(embed=create_look_embed(look, tag_rows, guild.id, attachment_filename=actual_filename), attachments=message.attachments, view=view)
+    await db.update_look_message_id(look_id, message.id)
 
     return message
 
@@ -123,7 +104,9 @@ class LookSubmit(commands.Cog):
             await db.add_look_tags(look_id, tag_ids, user_id)
             look = await db.get_look(look_id)
             tag_rows = await db.get_look_tag_names(look_id)
-            embed = create_look_embed(look, tag_rows, guild.id, attachment_filename=filename)
+            embed = create_look_embed(look, tag_rows, guild.id)
+            if message.attachments:
+                embed.set_image(url=message.attachments[0].url)
             await message.edit(embed=embed, attachments=message.attachments, view=LookManageView(look_id))
 
         return message, None

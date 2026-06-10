@@ -8,10 +8,23 @@ def build_gallery_jump_url(guild_id, channel_id, message_id):
 
 
 def format_tag_list(tags):
-    """Format tag rows as a hashtag string."""
+    """Format tag rows grouped by category."""
     if not tags:
         return "_No tags yet — use **Edit Tags** to add some._"
-    return " ".join(f"`#{tag['tag_name']}`" for tag in tags)
+
+    styles = [t['tag_name'] for t in tags if t.get('category') == 'Style']
+    look_tags = [t['tag_name'] for t in tags if t.get('category') == 'Tag']
+    others = [t['tag_name'] for t in tags if t.get('category') == 'Other']
+
+    lines = []
+    if styles:
+        lines.append("**Styles:** " + " ".join(f"`#{t}`" for t in styles))
+    if look_tags:
+        lines.append("**Tags:** " + " ".join(f"`#{t}`" for t in look_tags))
+    if others:
+        lines.append("**Other:** " + " ".join(f"`#{t}`" for t in others))
+    
+    return "\n".join(lines)
 
 
 def create_tag_list_embed(tags, server_name):
@@ -51,20 +64,8 @@ def create_look_embed(look, tags, guild_id, attachment_filename=None):
     embed.add_field(name="Tags", value=tag_line, inline=False)
     embed.add_field(name="Submitted by", value=f"<@{look['submitted_by']}>", inline=True)
 
-    # Prevent duplicate rendering by referencing the attachment
-    image_url = None
     if attachment_filename:
-        image_url = f"attachment://{attachment_filename}"
-    elif look['image_url']:
-        if "cdn.discordapp.com/attachments/" in look['image_url'] or "media.discordapp.net/attachments/" in look['image_url']:
-            import urllib.parse
-            filename = urllib.parse.unquote(look['image_url'].split('/')[-1].split('?')[0])
-            image_url = f"attachment://{filename}"
-        else:
-            image_url = look['image_url']
-
-    if image_url:
-        embed.set_image(url=image_url)
+        embed.set_image(url=f"attachment://{attachment_filename}")
 
     return embed
 
@@ -87,9 +88,6 @@ def create_search_gallery_embed(look, tags, page, total_count, mode, tag_names, 
         jump_url = build_gallery_jump_url(guild_id, look['channel_id'], look['bot_message_id'])
         embed.add_field(name="View post", value=f"[Jump to message]({jump_url})", inline=True)
 
-    if look['image_url']:
-        embed.set_image(url=look['image_url'])
-
     embed.set_footer(text=f"Search: {tag_label} | Result {page} of {total_count}")
     return embed
 
@@ -107,9 +105,6 @@ def create_search_results_embed(tag_names, looks, page, total_pages, total_count
     if not looks:
         embed.description = "No looks match all of these tags yet. Try `/look_submit` to add one!"
         return embed
-
-    if looks[0]['image_url']:
-        embed.set_image(url=looks[0]['image_url'])
 
     for index, look in enumerate(looks):
         comp_name = look['comp_name'] or "No name"

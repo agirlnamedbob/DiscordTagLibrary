@@ -26,20 +26,18 @@ class GalleryPaginationView(discord.ui.View):
         self.next_page.disabled = (self.current_page >= self.total_pages)
 
     async def refresh_view(self, interaction: discord.Interaction):
-        limit = 1
-        offset = self.current_page - 1
+        limit = 5
+        offset = (self.current_page - 1) * limit
 
         looks, total_count, _ = await db.search_looks(
             self.server_id, self.tag_names, mode=self.mode, limit=limit, offset=offset
         )
-        self.total_pages = total_count
+        self.total_pages = math.ceil(total_count / limit) if total_count > 0 else 1
         self.update_buttons()
 
         if looks:
-            look = looks[0]
-            tags = await db.get_look_tag_names(look['look_id'])
-            embed = create_search_gallery_embed(
-                look, tags, self.current_page, self.total_pages, self.mode, self.tag_names, guild_id=self.guild_id
+            embed = create_search_results_embed(
+                self.tag_names, looks, self.current_page, self.total_pages, total_count, guild_id=self.guild_id
             )
             await interaction.response.edit_message(embed=embed, view=self)
 
@@ -143,7 +141,7 @@ class SearchFormView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
 
         looks, total_count, _ = await db.search_looks(
-            interaction.guild.id, selected_names, mode=self.mode, limit=1, offset=0
+            interaction.guild.id, selected_names, mode=self.mode, limit=5, offset=0
         )
 
         if not looks:
@@ -154,10 +152,9 @@ class SearchFormView(discord.ui.View):
             )
             return
 
-        look = looks[0]
-        tags = await db.get_look_tag_names(look['look_id'])
-        embed = create_search_gallery_embed(
-            look, tags, page=1, total_count=total_count, mode=self.mode, tag_names=selected_names, guild_id=interaction.guild.id
+        total_pages = math.ceil(total_count / 5) if total_count > 0 else 1
+        embed = create_search_results_embed(
+            selected_names, looks, page=1, total_pages=total_pages, total_count=total_count, guild_id=interaction.guild.id
         )
 
         view = GalleryPaginationView(
@@ -166,7 +163,7 @@ class SearchFormView(discord.ui.View):
             server_id=interaction.guild.id,
             guild_id=interaction.guild.id,
             current_page=1,
-            total_pages=total_count,
+            total_pages=total_pages,
             mode=self.mode
         )
 
@@ -179,11 +176,22 @@ class TagCommands(commands.Cog):
 
     @app_commands.command(name="tag_create", description="Create a new tag")
     @app_commands.describe(
-        name="Tag name (e.g., 'business', 'fantasy')"
+        name="Tag name (e.g., 'business', 'fantasy')",
+        category="Category of the tag (Default: Other)"
     )
-    async def create_tag(self, interaction: discord.Interaction, name: str):
+    @app_commands.choices(category=[
+        app_commands.Choice(name="Style", value="Style"),
+        app_commands.Choice(name="Tag", value="Tag"),
+        app_commands.Choice(name="Other", value="Other"),
+    ])
+    async def create_tag(self, interaction: discord.Interaction, name: str, category: app_commands.Choice[str] = None):
         """Create a new tag"""
         try:
+            category_val = category.value if category else "Other"
+            if category_val in ["Style", "Tag"] and not interaction.user.guild_permissions.manage_guild:
+                await interaction.response.send_message("❌ Only Server Admins can create 'Style' and 'Tag' categories.", ephemeral=True)
+                return
+
             await interaction.response.defer()
 
             if len(name) > 50:
@@ -200,6 +208,7 @@ class TagCommands(commands.Cog):
             tag_id = await db.create_tag(
                 server_id=interaction.guild.id,
                 tag_name=name.lower(),
+                category=category_val,
                 created_by=interaction.user.id
             )
 

@@ -26,6 +26,7 @@ class Database:
                     tag_id SERIAL PRIMARY KEY,
                     server_id BIGINT NOT NULL,
                     tag_name VARCHAR(50) NOT NULL,
+                    category VARCHAR(20) DEFAULT 'Other',
                     created_by BIGINT,
                     created_date TIMESTAMP DEFAULT NOW(),
                     UNIQUE(server_id, tag_name)
@@ -38,7 +39,6 @@ class Database:
                     server_id BIGINT NOT NULL,
                     channel_id BIGINT NOT NULL,
                     bot_message_id BIGINT,
-                    image_url TEXT,
                     comp_name TEXT,
                     submitted_by BIGINT NOT NULL,
                     created_at TIMESTAMP DEFAULT NOW(),
@@ -58,6 +58,9 @@ class Database:
             ''')
             if column_exists:
                 await conn.execute('ALTER TABLE looks RENAME COLUMN caption TO comp_name')
+
+            await conn.execute("ALTER TABLE tags ADD COLUMN IF NOT EXISTS category VARCHAR(20) DEFAULT 'Other'")
+            await conn.execute('ALTER TABLE looks DROP COLUMN IF EXISTS image_url')
 
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS look_tags (
@@ -146,15 +149,15 @@ class Database:
             return result.endswith("1")
 
     # TAG OPERATIONS
-    async def create_tag(self, server_id, tag_name, created_by):
+    async def create_tag(self, server_id, tag_name, created_by, category='Other'):
         """Create a new tag"""
         async with self.pool.acquire() as conn:
             try:
                 tag_id = await conn.fetchval('''
-                    INSERT INTO tags (server_id, tag_name, created_by)
-                    VALUES ($1, $2, $3)
+                    INSERT INTO tags (server_id, tag_name, category, created_by)
+                    VALUES ($1, $2, $3, $4)
                     RETURNING tag_id
-                ''', server_id, tag_name, created_by)
+                ''', server_id, tag_name, category, created_by)
                 return tag_id
             except asyncpg.UniqueViolationError:
                 return None
@@ -163,7 +166,7 @@ class Database:
         """Get all tags in a server with look counts"""
         async with self.pool.acquire() as conn:
             tags = await conn.fetch('''
-                SELECT t.tag_id, t.tag_name, t.created_date,
+                SELECT t.tag_id, t.tag_name, t.category, t.created_date,
                        COUNT(DISTINCT lt.look_id) AS look_count
                 FROM tags t
                 LEFT JOIN look_tags lt ON t.tag_id = lt.tag_id
@@ -223,31 +226,24 @@ class Database:
         return tag_ids, missing
 
     # LOOK OPERATIONS
-    async def create_look(self, server_id, channel_id, comp_name, submitted_by, image_url=None):
+    async def create_look(self, server_id, channel_id, comp_name, submitted_by):
         """Insert a look row before the channel message is posted."""
         async with self.pool.acquire() as conn:
             look_id = await conn.fetchval('''
-                INSERT INTO looks (server_id, channel_id, comp_name, submitted_by, image_url)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO looks (server_id, channel_id, comp_name, submitted_by)
+                VALUES ($1, $2, $3, $4)
                 RETURNING look_id
-            ''', server_id, channel_id, comp_name, submitted_by, image_url)
+            ''', server_id, channel_id, comp_name, submitted_by)
             return look_id
 
-    async def update_look_message_id(self, look_id, bot_message_id, image_url=None):
+    async def update_look_message_id(self, look_id, bot_message_id):
         """Link a look to its bot-owned channel message."""
         async with self.pool.acquire() as conn:
-            if image_url is not None:
-                await conn.execute('''
-                    UPDATE looks
-                    SET bot_message_id = $2, image_url = $3, updated_at = NOW()
-                    WHERE look_id = $1
-                ''', look_id, bot_message_id, image_url)
-            else:
-                await conn.execute('''
-                    UPDATE looks
-                    SET bot_message_id = $2, updated_at = NOW()
-                    WHERE look_id = $1
-                ''', look_id, bot_message_id)
+            await conn.execute('''
+                UPDATE looks
+                SET bot_message_id = $2, updated_at = NOW()
+                WHERE look_id = $1
+            ''', look_id, bot_message_id)
 
     async def delete_look(self, look_id):
         """Remove a look (compensating action if channel post fails)."""
@@ -271,7 +267,7 @@ class Database:
         """Return tag names attached to a look."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch('''
-                SELECT t.tag_id, t.tag_name
+                SELECT t.tag_id, t.tag_name, t.category
                 FROM look_tags lt
                 JOIN tags t ON t.tag_id = lt.tag_id
                 WHERE lt.look_id = $1
@@ -354,7 +350,6 @@ class Database:
                     l.look_id,
                     l.bot_message_id,
                     l.channel_id,
-                    l.image_url,
                     l.comp_name,
                     l.submitted_by,
                     l.created_at,
@@ -364,7 +359,7 @@ class Database:
                 JOIN tags t ON t.tag_id = lt.tag_id
                 WHERE l.server_id = $1
                   AND lt.tag_id IN (SELECT tag_id FROM requested)
-                GROUP BY l.look_id, l.bot_message_id, l.channel_id, l.image_url,
+                GROUP BY l.look_id, l.bot_message_id, l.channel_id,
                          l.comp_name, l.submitted_by, l.created_at
                 {having_clause}
                 ORDER BY l.created_at DESC
