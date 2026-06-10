@@ -57,7 +57,8 @@ def create_look_embed(look, tags, guild_id, attachment_filename=None):
         image_url = f"attachment://{attachment_filename}"
     elif look['image_url']:
         if "cdn.discordapp.com/attachments/" in look['image_url'] or "media.discordapp.net/attachments/" in look['image_url']:
-            filename = look['image_url'].split('/')[-1].split('?')[0]
+            import urllib.parse
+            filename = urllib.parse.unquote(look['image_url'].split('/')[-1].split('?')[0])
             image_url = f"attachment://{filename}"
         else:
             image_url = look['image_url']
@@ -68,7 +69,7 @@ def create_look_embed(look, tags, guild_id, attachment_filename=None):
     return embed
 
 
-def create_search_gallery_embed(look, tags, page, total_count, mode, tag_names):
+def create_search_gallery_embed(look, tags, page, total_count, mode, tag_names, guild_id):
     """Create an embed showing a single look in a gallery view."""
     comp_name = look['comp_name'] or "No name"
     tag_line = format_tag_list(tags)
@@ -81,6 +82,10 @@ def create_search_gallery_embed(look, tags, page, total_count, mode, tag_names):
     )
     embed.add_field(name="Tags", value=tag_line, inline=False)
     embed.add_field(name="Submitted by", value=f"<@{look['submitted_by']}>", inline=True)
+
+    if look['bot_message_id']:
+        jump_url = build_gallery_jump_url(guild_id, look['channel_id'], look['bot_message_id'])
+        embed.add_field(name="View post", value=f"[Jump to message]({jump_url})", inline=True)
 
     if look['image_url']:
         embed.set_image(url=look['image_url'])

@@ -49,18 +49,15 @@ class Database:
 
             # Run migrations to update older schemas
             await conn.execute('ALTER TABLE tags DROP COLUMN IF EXISTS tag_color')
-            await conn.execute('''
-                DO $$
-                BEGIN
-                    IF EXISTS (
-                        SELECT 1 
-                        FROM information_schema.columns 
-                        WHERE table_name='looks' AND column_name='caption'
-                    ) THEN
-                        ALTER TABLE looks RENAME COLUMN caption TO comp_name;
-                    END IF;
-                END $$;
+            column_exists = await conn.fetchval('''
+                SELECT EXISTS (
+                    SELECT 1 
+                    FROM information_schema.columns 
+                    WHERE table_name='looks' AND column_name='caption'
+                )
             ''')
+            if column_exists:
+                await conn.execute('ALTER TABLE looks RENAME COLUMN caption TO comp_name')
 
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS look_tags (

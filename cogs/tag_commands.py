@@ -39,7 +39,7 @@ class GalleryPaginationView(discord.ui.View):
             look = looks[0]
             tags = await db.get_look_tag_names(look['look_id'])
             embed = create_search_gallery_embed(
-                look, tags, self.current_page, self.total_pages, self.mode, self.tag_names
+                look, tags, self.current_page, self.total_pages, self.mode, self.tag_names, guild_id=self.guild_id
             )
             await interaction.response.edit_message(embed=embed, view=self)
 
@@ -157,7 +157,7 @@ class SearchFormView(discord.ui.View):
         look = looks[0]
         tags = await db.get_look_tag_names(look['look_id'])
         embed = create_search_gallery_embed(
-            look, tags, page=1, total_count=total_count, mode=self.mode, tag_names=selected_names
+            look, tags, page=1, total_count=total_count, mode=self.mode, tag_names=selected_names, guild_id=interaction.guild.id
         )
 
         view = GalleryPaginationView(
