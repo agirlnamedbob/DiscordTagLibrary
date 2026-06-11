@@ -75,7 +75,7 @@ class PaginatedTagsView(discord.ui.View):
     def update_components(self):
         self.clear_items()
 
-        cat_tags = [t for t in self.all_tags if t.get('category', 'Custom') == self.category]
+        cat_tags = [t for t in self.all_tags if t['category'] == self.category]
         total_pages = max(1, math.ceil(len(cat_tags) / 25))
         if self.page >= total_pages:
             self.page = total_pages - 1
@@ -140,7 +140,7 @@ class PaginatedTagsView(discord.ui.View):
             look_message = await channel.fetch_message(look['bot_message_id'])
             
             # Use database filename, falling back to message attachments if needed
-            filename = look.get('image_filename') or (look_message.attachments[0].filename if look_message.attachments else None)
+            filename = look['image_filename'] or (look_message.attachments[0].filename if look_message.attachments else None)
             embed = create_look_embed(look, tag_rows, interaction.guild.id, attachment_filename=filename)
                 
             await look_message.edit(embed=embed)
@@ -193,7 +193,7 @@ class EditTitleModal(discord.ui.Modal, title="Edit Competition Name"):
 
         try:
             # Use database filename, falling back to message attachments if needed
-            filename = look.get('image_filename') or (interaction.message.attachments[0].filename if interaction.message.attachments else None)
+            filename = look['image_filename'] or (interaction.message.attachments[0].filename if interaction.message.attachments else None)
             embed = create_look_embed(look, tag_rows, interaction.guild.id, attachment_filename=filename)
                 
             # Edit the message with the updated embed title (omit attachments to retain existing file)

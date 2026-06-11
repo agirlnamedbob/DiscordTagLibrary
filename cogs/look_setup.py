@@ -54,7 +54,7 @@ class LookSetup(commands.Cog):
                 lines.append(f"• {label}")
 
             embed = discord.Embed(
-                title="Look submission channels",
+                title="✦ Look Submission Channels ✦",
                 description="\n".join(lines),
                 color=discord.Color.blue(),
             )

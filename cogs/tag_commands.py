@@ -3,7 +3,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from utils.database import db
-from utils.embeds import create_tag_list_embed, create_search_results_embed, create_search_gallery_embed
+from utils.embeds import create_tag_list_embed, create_search_results_embed
 from utils.helpers import parse_tag_string
 
 
@@ -257,7 +257,7 @@ class PaginatedSearchFormView(discord.ui.View):
     def update_components(self):
         self.clear_items()
 
-        cat_tags = [t for t in self.all_tags if t.get('category', 'Custom') == self.category]
+        cat_tags = [t for t in self.all_tags if t['category'] == self.category]
         total_pages = max(1, math.ceil(len(cat_tags) / 25))
         if self.page >= total_pages:
             self.page = total_pages - 1
@@ -419,9 +419,9 @@ class TagCommands(commands.Cog):
             tags = await db.get_tags(interaction.guild.id)
             category_val = category.value
             
-            cat_tags = [t for t in tags if t.get('category') == category_val]
+            cat_tags = [t for t in tags if t['category'] == category_val]
             if category_val == 'Custom':
-                cat_tags = [t for t in tags if t.get('category') in ['Custom', 'Other']]
+                cat_tags = [t for t in tags if t['category'] in ['Custom', 'Other']]
 
             # Sort alphabetically by name
             cat_tags = sorted(cat_tags, key=lambda x: x['tag_name'])
@@ -506,7 +506,7 @@ class TagCommands(commands.Cog):
 
             view = PaginatedSearchFormView(interaction.user.id, tags)
             embed = discord.Embed(
-                title="🔍 Lookbook Tag Search Panel",
+                title="✦ Lookbook Tag Search Panel ✦",
                 description=(
                     "Use the dropdown select menu below to pick one or more tags across categories.\n"
                     "Toggle the search mode button to change matching behavior:\n"
@@ -529,13 +529,13 @@ class TagCommands(commands.Cog):
             await interaction.response.defer(ephemeral=True)
 
             embed = discord.Embed(
-                title="📖 Tag Library Help Guide",
+                title="✦ Tag Library Help Guide ✦",
                 description="Welcome to the Discord Tag Library bot! Here is a guide on how to configure and use the bot.",
                 color=discord.Color.blue()
             )
 
             embed.add_field(
-                name="🔧 Admin Configuration",
+                name="✦ Admin Configuration ✦",
                 value=(
                     "• `/look_setup action:Add channel channel:#name`\n"
                     "  Enable look submissions inside the specified channel.\n"
@@ -548,7 +548,7 @@ class TagCommands(commands.Cog):
             )
 
             embed.add_field(
-                name="🏷️ Tag Management",
+                name="✦ Tag Management ✦",
                 value=(
                     "• `/tag_create name:tagName`\n"
                     "  Create a new tag (automatically placed in the **Custom** category).\n"
@@ -561,7 +561,7 @@ class TagCommands(commands.Cog):
             )
 
             embed.add_field(
-                name="📸 Submitting Looks",
+                name="✦ Submitting Looks ✦",
                 value=(
                     "• `/look_submit image:[upload] comp_name:Name`\n"
                     "  Submit a new lookbook entry inside an allowlisted channel.\n"
@@ -573,7 +573,7 @@ class TagCommands(commands.Cog):
             )
 
             embed.add_field(
-                name="🔍 Searching the Lookbook",
+                name="✦ Searching the Lookbook ✦",
                 value=(
                     "• `/tag_search`\n"
                     "  Brings up an interactive search form where you can select tags across categories (Style, Tag, Custom) in a paginated view, toggle search modes (**AND** vs **OR**), and browse results as a paginated image gallery."
