@@ -29,19 +29,28 @@ async def post_look_message(
 ):
     """Post a look embed publicly in the given channel."""
     # Sanitize filename to avoid space mismatch during discord upload/embed matching
-    filename = filename.replace(" ", "_")
+    predicted_filename = filename.replace(" ", "_")
 
     look = await db.get_look(look_id)
     tag_rows = await db.get_look_tag_names(look_id)
-    embed = create_look_embed(look, tag_rows, guild.id, attachment_filename=filename)
+    embed = create_look_embed(look, tag_rows, guild.id, attachment_filename=predicted_filename)
 
-    file = discord.File(fp=BytesIO(image_bytes), filename=filename)
+    file = discord.File(fp=BytesIO(image_bytes), filename=predicted_filename)
     view = LookManageView(look_id)
     bot.add_view(view)
 
     message = await channel.send(embed=embed, file=file, view=view)
 
-    await db.update_look_message_id(look_id, message.id)
+    # Capture the exact filename registered by Discord CDN
+    actual_filename = message.attachments[0].filename if message.attachments else predicted_filename
+
+    # Save the exact name Discord registered and link the bot message ID
+    await db.update_look_message_and_image(look_id, message.id, actual_filename)
+
+    # If Discord's CDN sanitizer renamed the file, update the embed immediately to align the attachment:// URL
+    if actual_filename != predicted_filename:
+        embed = create_look_embed(look, tag_rows, guild.id, attachment_filename=actual_filename)
+        await message.edit(embed=embed)
 
     return message
 
@@ -105,9 +114,9 @@ class LookSubmit(commands.Cog):
             look = await db.get_look(look_id)
             tag_rows = await db.get_look_tag_names(look_id)
             
-            filename = message.attachments[0].filename if message.attachments else None
+            filename = look['image_filename']
             embed = create_look_embed(look, tag_rows, guild.id, attachment_filename=filename)
-            await message.edit(embed=embed, attachments=message.attachments, view=LookManageView(look_id))
+            await message.edit(embed=embed, view=LookManageView(look_id))
 
         return message, None
 

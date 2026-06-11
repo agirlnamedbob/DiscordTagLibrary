@@ -139,10 +139,11 @@ class PaginatedTagsView(discord.ui.View):
                 channel = await interaction.guild.fetch_channel(look['channel_id'])
             look_message = await channel.fetch_message(look['bot_message_id'])
             
-            filename = look_message.attachments[0].filename if look_message.attachments else None
+            # Use database filename, falling back to message attachments if needed
+            filename = look.get('image_filename') or (look_message.attachments[0].filename if look_message.attachments else None)
             embed = create_look_embed(look, tag_rows, interaction.guild.id, attachment_filename=filename)
                 
-            await look_message.edit(embed=embed, attachments=look_message.attachments)
+            await look_message.edit(embed=embed)
         except discord.NotFound:
             await interaction.followup.send("✅ Tags saved, but the look message was deleted.", ephemeral=True)
             return
@@ -191,11 +192,12 @@ class EditTitleModal(discord.ui.Modal, title="Edit Competition Name"):
         tag_rows = await db.get_look_tag_names(self.look_id)
 
         try:
-            filename = interaction.message.attachments[0].filename if interaction.message.attachments else None
+            # Use database filename, falling back to message attachments if needed
+            filename = look.get('image_filename') or (interaction.message.attachments[0].filename if interaction.message.attachments else None)
             embed = create_look_embed(look, tag_rows, interaction.guild.id, attachment_filename=filename)
                 
-            # Edit the message with the updated embed title
-            await interaction.message.edit(embed=embed, attachments=interaction.message.attachments)
+            # Edit the message with the updated embed title (omit attachments to retain existing file)
+            await interaction.message.edit(embed=embed)
             await interaction.followup.send("✅ Title updated!", ephemeral=True)
         except Exception as e:
             print(f"❌ Error editing look message: {e}")

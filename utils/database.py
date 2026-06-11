@@ -41,6 +41,7 @@ class Database:
                     bot_message_id BIGINT,
                     comp_name TEXT,
                     submitted_by BIGINT NOT NULL,
+                    image_filename VARCHAR(100),
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW(),
                     UNIQUE(server_id, bot_message_id)
@@ -63,6 +64,7 @@ class Database:
             await conn.execute("ALTER TABLE tags ALTER COLUMN category SET DEFAULT 'Custom'")
             await conn.execute("UPDATE tags SET category = 'Custom' WHERE category = 'Other'")
             await conn.execute('ALTER TABLE looks DROP COLUMN IF EXISTS image_url')
+            await conn.execute("ALTER TABLE looks ADD COLUMN IF NOT EXISTS image_filename VARCHAR(100)")
 
             # Deduplicate tags to avoid unique constraint violations before lowercasing
             await conn.execute('''
@@ -252,7 +254,7 @@ class Database:
                 DELETE FROM tags
                 WHERE server_id = $1 AND LOWER(tag_name) = LOWER($2)
             ''', server_id, tag_name)
-            return "1 row" in str(result)
+            return result == 'DELETE 1' or result.endswith(' 1')
 
     async def get_tag_id(self, server_id, tag_name):
         """Get tag ID by name"""
@@ -286,14 +288,14 @@ class Database:
         return tag_ids, missing
 
     # LOOK OPERATIONS
-    async def create_look(self, server_id, channel_id, comp_name, submitted_by):
+    async def create_look(self, server_id, channel_id, comp_name, submitted_by, image_filename=None):
         """Insert a look row before the channel message is posted."""
         async with self.pool.acquire() as conn:
             look_id = await conn.fetchval('''
-                INSERT INTO looks (server_id, channel_id, comp_name, submitted_by)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO looks (server_id, channel_id, comp_name, submitted_by, image_filename)
+                VALUES ($1, $2, $3, $4, $5)
                 RETURNING look_id
-            ''', server_id, channel_id, comp_name, submitted_by)
+            ''', server_id, channel_id, comp_name, submitted_by, image_filename)
             return look_id
 
     async def update_look_message_id(self, look_id, bot_message_id):
@@ -304,6 +306,15 @@ class Database:
                 SET bot_message_id = $2, updated_at = NOW()
                 WHERE look_id = $1
             ''', look_id, bot_message_id)
+
+    async def update_look_message_and_image(self, look_id, bot_message_id, image_filename):
+        """Link a look to its message and save the actual image filename."""
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                UPDATE looks
+                SET bot_message_id = $2, image_filename = $3, updated_at = NOW()
+                WHERE look_id = $1
+            ''', look_id, bot_message_id, image_filename)
 
     async def delete_look(self, look_id):
         """Remove a look (compensating action if channel post fails)."""

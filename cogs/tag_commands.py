@@ -439,7 +439,7 @@ class TagCommands(commands.Cog):
     async def delete_tag(self, interaction: discord.Interaction, name: str):
         """Delete a tag"""
         try:
-            await interaction.response.defer()
+            await interaction.response.defer(ephemeral=True)
 
             if not interaction.user.guild_permissions.manage_guild:
                 await interaction.followup.send("❌ You need manage server permissions", ephemeral=True)
@@ -475,9 +475,13 @@ class TagCommands(commands.Cog):
             tag_names = await db.get_tag_names(interaction.guild.id)
             if not tag_names:
                 return []
+
+            from config import HARDCODED_STYLES, HARDCODED_TAGS
+            hardcoded = {s.lower() for s in HARDCODED_STYLES + HARDCODED_TAGS}
+
             return [
                 app_commands.Choice(name=f"#{name}", value=name)
-                for name in tag_names if current.lower() in name.lower()
+                for name in tag_names if (current.lower() in name.lower() and name.lower() not in hardcoded)
             ][:25]
         except Exception as e:
             print(f"❌ Error in tag_autocomplete: {e}")
