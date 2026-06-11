@@ -60,18 +60,18 @@ class GalleryPaginationView(discord.ui.View):
         await self.refresh_view(interaction)
 
 
-class TagListSearchDropdown(discord.ui.Select):
-    def __init__(self, tags: list):
+class PaginatedTagListDropdown(discord.ui.Select):
+    def __init__(self, page_tags: list, page: int):
         options = []
-        for tag in tags[:25]:  # Discord select menu limit is 25
+        for tag in page_tags:
             options.append(discord.SelectOption(
                 label=f"#{tag['tag_name']}",
                 value=tag['tag_name'],
                 description=f"{tag['look_count'] or 0} looks"
             ))
         super().__init__(
-            placeholder="Select a tag to search looks...",
-            options=options if options else [discord.SelectOption(label="No tags available", value="none")],
+            placeholder=f"Select tag to search (Page {page + 1})...",
+            options=options if options else [discord.SelectOption(label="No tags in this category", value="none")],
             custom_id="tag_list_search_select",
             disabled=not options
         )
@@ -113,11 +113,60 @@ class TagListSearchDropdown(discord.ui.Select):
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 
-class TagListView(discord.ui.View):
-    def __init__(self, tags: list):
+class PaginatedTagListView(discord.ui.View):
+    def __init__(self, author_id: int, tags: list):
         super().__init__(timeout=180)
-        if tags:
-            self.add_item(TagListSearchDropdown(tags))
+        self.author_id = author_id
+        self.tags = tags
+        self.page = 0
+        self.update_components()
+
+    def update_components(self):
+        self.clear_items()
+
+        total_pages = max(1, math.ceil(len(self.tags) / 25))
+        if self.page >= total_pages:
+            self.page = total_pages - 1
+
+        start_idx = self.page * 25
+        page_tags = self.tags[start_idx:start_idx + 25]
+
+        self.add_item(PaginatedTagListDropdown(page_tags, self.page))
+
+        if total_pages > 1:
+            prev_btn = discord.ui.Button(
+                label="⬅️ Prev", 
+                style=discord.ButtonStyle.secondary, 
+                disabled=(self.page == 0),
+                custom_id="tag_list_prev_btn"
+            )
+            prev_btn.callback = self.prev_page
+            self.add_item(prev_btn)
+
+            next_btn = discord.ui.Button(
+                label="Next ➡️", 
+                style=discord.ButtonStyle.secondary, 
+                disabled=(self.page >= total_pages - 1),
+                custom_id="tag_list_next_btn"
+            )
+            next_btn.callback = self.next_page
+            self.add_item(next_btn)
+
+    async def prev_page(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This menu isn't yours!", ephemeral=True)
+            return
+        self.page -= 1
+        self.update_components()
+        await interaction.response.edit_message(view=self)
+
+    async def next_page(self, interaction: discord.Interaction):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("This menu isn't yours!", ephemeral=True)
+            return
+        self.page += 1
+        self.update_components()
+        await interaction.response.edit_message(view=self)
 
 
 class PaginatedSearchTagsSelect(discord.ui.Select):
@@ -355,16 +404,31 @@ class TagCommands(commands.Cog):
             print(f"❌ Error in create_tag: {e}")
             await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
-    @app_commands.command(name="tag_list", description="Show all tags in this server")
-    async def list_tags(self, interaction: discord.Interaction):
-        """List all tags"""
+    @app_commands.command(name="tag_list", description="Show all tags in a specific category")
+    @app_commands.describe(category="The category of tags to list (Style, Tag, or Custom)")
+    @app_commands.choices(category=[
+        app_commands.Choice(name="Style", value="Style"),
+        app_commands.Choice(name="Tag", value="Tag"),
+        app_commands.Choice(name="Custom", value="Custom"),
+    ])
+    async def list_tags(self, interaction: discord.Interaction, category: app_commands.Choice[str]):
+        """List all tags in a category"""
         try:
             await interaction.response.defer(ephemeral=True)
 
             tags = await db.get_tags(interaction.guild.id)
-            embed = create_tag_list_embed(tags, interaction.guild.name)
+            category_val = category.value
+            
+            cat_tags = [t for t in tags if t.get('category') == category_val]
+            if category_val == 'Custom':
+                cat_tags = [t for t in tags if t.get('category') in ['Custom', 'Other']]
 
-            view = TagListView(tags)
+            # Sort alphabetically by name
+            cat_tags = sorted(cat_tags, key=lambda x: x['tag_name'])
+
+            embed = create_tag_list_embed(cat_tags, category_val, interaction.guild.name)
+
+            view = PaginatedTagListView(interaction.user.id, cat_tags)
             await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         except Exception as e:
             print(f"❌ Error in tag_list: {e}")
@@ -381,27 +445,30 @@ class TagCommands(commands.Cog):
                 await interaction.followup.send("❌ You need manage server permissions", ephemeral=True)
                 return
 
+            cleaned_name = name.lower().strip().lstrip("#")
+
             from config import HARDCODED_STYLES, HARDCODED_TAGS
-            if name.lower().strip() in [s.lower() for s in HARDCODED_STYLES + HARDCODED_TAGS]:
+            if cleaned_name in [s.lower() for s in HARDCODED_STYLES + HARDCODED_TAGS]:
                 await interaction.followup.send("❌ Cannot delete hardcoded Style or Tag options.", ephemeral=True)
                 return
 
-            success = await db.delete_tag(interaction.guild.id, name.lower())
+            success = await db.delete_tag(interaction.guild.id, cleaned_name)
 
             if success:
                 embed = discord.Embed(
                     title="✅ Tag Deleted",
-                    description=f"Tag `#{name.lower()}` has been removed",
+                    description=f"Tag `#{cleaned_name}` has been removed",
                     color=discord.Color.red()
                 )
                 await interaction.followup.send(embed=embed)
             else:
-                await interaction.followup.send(f"❌ Tag `#{name.lower()}` not found", ephemeral=True)
+                await interaction.followup.send(f"❌ Tag `#{cleaned_name}` not found", ephemeral=True)
 
         except Exception as e:
             print(f"❌ Error in delete_tag: {e}")
             await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
 
+    @delete_tag.autocomplete('name')
     async def tag_autocomplete(self, interaction: discord.Interaction, current: str):
         """Autocompletes available workspace tags as the user types"""
         try:
@@ -480,9 +547,9 @@ class TagCommands(commands.Cog):
                 name="🏷️ Tag Management",
                 value=(
                     "• `/tag_create name:tagName`\n"
-                    "  Create a new tag to label looks.\n"
-                    "• `/tag_list`\n"
-                    "  Show all available tags in this server along with their look count.\n"
+                    "  Create a new tag (automatically placed in the **Custom** category).\n"
+                    "• `/tag_list category:[Style/Tag/Custom]`\n"
+                    "  Show tags in the selected category along with their look counts.\n"
                     "• `/tag_delete name:tagName`\n"
                     "  Delete a tag from the server (requires Manage Server permission)."
                 ),
@@ -496,7 +563,7 @@ class TagCommands(commands.Cog):
                     "  Submit a new lookbook entry inside an allowlisted channel.\n"
                     "• **Form-Based Controls** (buttons attached to posts):\n"
                     "  - **Edit Title**: Click to rename the look name using a modal popup.\n"
-                    "  - **Edit Tags**: Click to assign or modify tags using a multiselect dropdown."
+                    "  - **Edit Tags**: Click to assign or modify tags across categories (Style, Tag, Custom) using a paginated multiselect view."
                 ),
                 inline=False
             )
@@ -505,7 +572,7 @@ class TagCommands(commands.Cog):
                 name="🔍 Searching the Lookbook",
                 value=(
                     "• `/tag_search`\n"
-                    "  Brings up an interactive search form where you can choose tags from a dropdown, toggle search modes (**AND** matching all tags vs **OR** matching any tag), and browse the results as a paginated image gallery."
+                    "  Brings up an interactive search form where you can select tags across categories (Style, Tag, Custom) in a paginated view, toggle search modes (**AND** vs **OR**), and browse results as a paginated image gallery."
                 ),
                 inline=False
             )

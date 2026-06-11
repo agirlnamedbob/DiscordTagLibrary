@@ -64,6 +64,41 @@ class Database:
             await conn.execute("UPDATE tags SET category = 'Custom' WHERE category = 'Other'")
             await conn.execute('ALTER TABLE looks DROP COLUMN IF EXISTS image_url')
 
+            # Deduplicate tags to avoid unique constraint violations before lowercasing
+            await conn.execute('''
+                DO $$
+                DECLARE
+                    r RECORD;
+                BEGIN
+                    FOR r IN 
+                        SELECT server_id, LOWER(tag_name) as low_name, array_agg(tag_id ORDER BY tag_id) as ids
+                        FROM tags
+                        GROUP BY server_id, LOWER(tag_name)
+                        HAVING COUNT(*) > 1
+                    LOOP
+                        BEGIN
+                            -- Delete look_tags links that would duplicate/conflict on merge
+                            DELETE FROM look_tags 
+                            WHERE tag_id = ANY(r.ids[2:]) 
+                              AND look_id IN (SELECT look_id FROM look_tags WHERE tag_id = r.ids[1]);
+
+                            -- Update other links to point to the tag we are keeping
+                            UPDATE look_tags 
+                            SET tag_id = r.ids[1] 
+                            WHERE tag_id = ANY(r.ids[2:]);
+
+                            -- Delete the duplicate tag records
+                            DELETE FROM tags WHERE tag_id = ANY(r.ids[2:]);
+                        EXCEPTION WHEN OTHERS THEN
+                            RAISE NOTICE 'Error migrating duplicate tag %: %', r.low_name, SQLERRM;
+                        END;
+                    END LOOP;
+                END $$;
+            ''')
+            
+            # Convert all tags to lowercase
+            await conn.execute("UPDATE tags SET tag_name = LOWER(tag_name)")
+
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS look_tags (
                     look_id INTEGER NOT NULL REFERENCES looks(look_id) ON DELETE CASCADE,
@@ -215,7 +250,7 @@ class Database:
         async with self.pool.acquire() as conn:
             result = await conn.execute('''
                 DELETE FROM tags
-                WHERE server_id = $1 AND tag_name = $2
+                WHERE server_id = $1 AND LOWER(tag_name) = LOWER($2)
             ''', server_id, tag_name)
             return "1 row" in str(result)
 
@@ -224,7 +259,7 @@ class Database:
         async with self.pool.acquire() as conn:
             tag_id = await conn.fetchval('''
                 SELECT tag_id FROM tags
-                WHERE server_id = $1 AND tag_name = $2
+                WHERE server_id = $1 AND LOWER(tag_name) = LOWER($2)
             ''', server_id, tag_name)
             return tag_id
 
@@ -241,8 +276,8 @@ class Database:
 
         async with self.pool.acquire() as conn:
             rows = await conn.fetch('''
-                SELECT tag_id, tag_name FROM tags
-                WHERE server_id = $1 AND tag_name = ANY($2::text[])
+                SELECT tag_id, LOWER(tag_name) as tag_name FROM tags
+                WHERE server_id = $1 AND LOWER(tag_name) = ANY($2::text[])
             ''', server_id, unique_names)
 
         found = {row['tag_name']: row['tag_id'] for row in rows}
@@ -353,7 +388,7 @@ class Database:
         async with self.pool.acquire() as conn:
             resolved_count = await conn.fetchval('''
                 SELECT COUNT(*)::int FROM tags
-                WHERE server_id = $1 AND tag_name = ANY($2::text[])
+                WHERE server_id = $1 AND LOWER(tag_name) = ANY($2::text[])
             ''', server_id, unique_names)
 
             if not resolved_count or resolved_count == 0:
@@ -366,7 +401,7 @@ class Database:
             looks = await conn.fetch(f'''
                 WITH requested AS (
                     SELECT tag_id FROM tags
-                    WHERE server_id = $1 AND tag_name = ANY($2::text[])
+                    WHERE server_id = $1 AND LOWER(tag_name) = ANY($2::text[])
                 ),
                 resolved_count AS (
                     SELECT COUNT(*)::int AS n FROM requested
@@ -394,7 +429,7 @@ class Database:
             total = await conn.fetchval(f'''
                 WITH requested AS (
                     SELECT tag_id FROM tags
-                    WHERE server_id = $1 AND tag_name = ANY($2::text[])
+                    WHERE server_id = $1 AND LOWER(tag_name) = ANY($2::text[])
                 ),
                 resolved_count AS (
                     SELECT COUNT(*)::int AS n FROM requested

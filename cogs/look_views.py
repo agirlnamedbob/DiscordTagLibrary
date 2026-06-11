@@ -142,7 +142,7 @@ class PaginatedTagsView(discord.ui.View):
             filename = look_message.attachments[0].filename if look_message.attachments else None
             embed = create_look_embed(look, tag_rows, interaction.guild.id, attachment_filename=filename)
                 
-            await look_message.edit(embed=embed)
+            await look_message.edit(embed=embed, attachments=look_message.attachments)
         except discord.NotFound:
             await interaction.followup.send("✅ Tags saved, but the look message was deleted.", ephemeral=True)
             return
@@ -195,7 +195,7 @@ class EditTitleModal(discord.ui.Modal, title="Edit Competition Name"):
             embed = create_look_embed(look, tag_rows, interaction.guild.id, attachment_filename=filename)
                 
             # Edit the message with the updated embed title
-            await interaction.message.edit(embed=embed)
+            await interaction.message.edit(embed=embed, attachments=interaction.message.attachments)
             await interaction.followup.send("✅ Title updated!", ephemeral=True)
         except Exception as e:
             print(f"❌ Error editing look message: {e}")

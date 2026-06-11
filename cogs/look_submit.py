@@ -107,7 +107,7 @@ class LookSubmit(commands.Cog):
             
             filename = message.attachments[0].filename if message.attachments else None
             embed = create_look_embed(look, tag_rows, guild.id, attachment_filename=filename)
-            await message.edit(embed=embed, view=LookManageView(look_id))
+            await message.edit(embed=embed, attachments=message.attachments, view=LookManageView(look_id))
 
         return message, None
 
